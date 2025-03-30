@@ -19,7 +19,7 @@ use openidconnect::reqwest;
 use openidconnect::AdditionalClaims;
 use openidconnect::*;
 use openidconnect::{
-    AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, OAuth2TokenResponse, Scope,
+    AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, OAuth2TokenResponse,
 };
 use serde::{Deserialize, Serialize};
 
@@ -63,51 +63,6 @@ pub struct KeycloakClaim {
 }
 
 impl AdditionalClaims for KeycloakClaim {}
-
-#[get("/login")]
-async fn login(auth_state: &State<AuthState>) -> Redirect {
-    let (auth_url, _csrf_token, _) = auth_state
-        .client
-        .authorize_url(
-            AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
-            CsrfToken::new_random,
-            Nonce::new_random,
-        )
-        .url();
-
-    Redirect::to(auth_url.to_string())
-}
-
-#[get("/callback?<code>&<state>")]
-async fn callback(
-    jar: &CookieJar<'_>,
-    auth_state: &State<AuthState>,
-    code: String,
-    state: String,
-) -> Redirect {
-    let http_client = reqwest::ClientBuilder::new()
-        // Following redirects opens the client up to SSRF vulnerabilities.
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap_or_else(|err| {
-            unreachable!();
-        });
-
-    let token = auth_state
-        .client
-        .exchange_code(AuthorizationCode::new(code))
-        .unwrap()
-        .request_async(&http_client)
-        .await
-        .unwrap_or_else(|err| {
-            unreachable!();
-        });
-
-    jar.add(
-        Cookie::build(("access_token", token.access_token().secret().to_string())).expires(None),
-    );
-    Redirect::to("/profile/")
-}
 
 /// list of claims
 #[derive(Debug, Deserialize, Serialize)]
