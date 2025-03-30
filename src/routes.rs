@@ -13,7 +13,7 @@ use openidconnect::{
 
 #[get("/keycloak")]
 pub async fn keycloak(auth_state: &State<AuthState>) -> Redirect {
-    let (authorize_url, csrf_state, nonce) = auth_state
+    let (authorize_url, _csrf_state, _nonce) = auth_state
         .client
         .authorize_url(
             AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
@@ -38,7 +38,7 @@ pub async fn callback(
         // Following redirects opens the client up to SSRF vulnerabilities.
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_else(|err| {
+        .unwrap_or_else(|_err| {
             unreachable!();
         });
 
@@ -48,7 +48,7 @@ pub async fn callback(
         .unwrap()
         .request_async(&http_client)
         .await
-        .unwrap_or_else(|err| {
+        .unwrap_or_else(|_err| {
             unreachable!();
         });
 

@@ -6,21 +6,17 @@ use std::collections::HashSet;
 
 use jsonwebtoken::*;
 use openidconnect::core::*;
-use openidconnect::core::{CoreGenderClaim, CoreResponseType};
+use openidconnect::core::CoreGenderClaim;
 
 use rocket::{
-    http::{Cookie, CookieJar, Status},
+    http::Status,
     request::{FromRequest, Outcome},
-    response::Redirect,
-    Request, State
+    Request
 };
 
 use openidconnect::reqwest;
 use openidconnect::AdditionalClaims;
 use openidconnect::*;
-use openidconnect::{
-    AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, OAuth2TokenResponse,
-};
 use serde::{Deserialize, Serialize};
 
 type OpenIDClient<
@@ -117,15 +113,14 @@ pub async fn keycloak_oidc_auth(client_id: String, client_secret: String, issuer
         // Following redirects opens the client up to SSRF vulnerabilities.
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_else(|err| {
+        .unwrap_or_else(|_err| {
             unreachable!();
         });
 
     // Fetch GitLab's OpenID Connect discovery document.
     let provider_metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
         .await
-        .unwrap_or_else(|err| {
-            panic!("{}", err);
+        .unwrap_or_else(|_err| {
             unreachable!();
         });
 
@@ -167,7 +162,7 @@ pub async fn keycloak_oidc_auth(client_id: String, client_secret: String, issuer
     // This example will be running its own server at localhost:8080.
     // See below for the server implementation.
     .set_redirect_uri(
-        RedirectUrl::new("http://qrespite.org:8000/callback/".to_string()).unwrap_or_else(|err| {
+        RedirectUrl::new("http://qrespite.org:8000/callback/".to_string()).unwrap_or_else(|_err| {
             unreachable!();
         }),
     );
