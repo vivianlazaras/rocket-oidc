@@ -46,6 +46,10 @@ type OpenIDClient<
     HasUserInfoUrl,
 >;
 
+pub struct Config {
+    
+}
+
 #[derive(Clone)]
 pub struct AuthState {
     client: OpenIDClient,
@@ -63,9 +67,9 @@ impl AdditionalClaims for KeycloakClaim {}
 /// list of claims
 #[derive(Debug, Deserialize, Serialize)]
 pub struct OIDCGuard {
-    exp: usize,
-    aud: Vec<String>,
-    sub: String,
+    pub exp: usize,
+    pub aud: Vec<String>,
+    pub sub: String,
     // Include other claims you care about here
 }
 
