@@ -52,9 +52,9 @@ pub struct Config {
 
 #[derive(Clone)]
 pub struct AuthState {
-    client: OpenIDClient,
-    public_key: DecodingKey,
-    validation: Validation,
+    pub client: OpenIDClient,
+    pub public_key: DecodingKey,
+    pub validation: Validation,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
