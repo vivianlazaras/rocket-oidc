@@ -1,5 +1,5 @@
 /// This Module will contain routes for 3pid verification through OIDC
-use rocket::{response::Redirect, State};
+use rocket::{Route, State, response::Redirect, routes};
 
 use crate::AuthState;
 
@@ -7,9 +7,7 @@ use openidconnect::{AuthorizationCode, OAuth2TokenResponse, core::CoreResponseTy
 
 use rocket::http::{Cookie, CookieJar};
 
-use openidconnect::{
-    AuthenticationFlow, CsrfToken, Nonce, Scope,
-};
+use openidconnect::{AuthenticationFlow, CsrfToken, Nonce, Scope};
 
 #[get("/keycloak")]
 pub async fn keycloak(auth_state: &State<AuthState>) -> Redirect {
@@ -27,33 +25,42 @@ pub async fn keycloak(auth_state: &State<AuthState>) -> Redirect {
     Redirect::to(authorize_url.to_string())
 }
 
-#[get("/callback?<code>&<state>")]
+#[get("/callback?<code>&<_state>")]
 pub async fn callback(
     jar: &CookieJar<'_>,
     auth_state: &State<AuthState>,
     code: String,
-    state: String,
+    _state: String,
 ) -> Redirect {
-    let http_client = reqwest::ClientBuilder::new()
-        // Following redirects opens the client up to SSRF vulnerabilities.
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap_or_else(|_err| {
-            unreachable!();
-        });
+    if let Some(_access_token) = jar.get("access_token") {
+        Redirect::to(auth_state.config.redirect.clone())
+    } else {
+        let http_client = reqwest::ClientBuilder::new()
+            // Following redirects opens the client up to SSRF vulnerabilities.
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_else(|_err| {
+                unreachable!();
+            });
 
-    let token = auth_state
-        .client
-        .exchange_code(AuthorizationCode::new(code))
-        .unwrap()
-        .request_async(&http_client)
-        .await
-        .unwrap_or_else(|_err| {
-            unreachable!();
-        });
+        let token = auth_state
+            .client
+            .exchange_code(AuthorizationCode::new(code))
+            .unwrap()
+            .request_async(&http_client)
+            .await
+            .unwrap_or_else(|err| {
+                panic!("error: {:?}", err);
+            });
 
-    jar.add(
-        Cookie::build(("access_token", token.access_token().secret().to_string())).expires(None),
-    );
-    Redirect::to("/profile/")
+        jar.add(
+            Cookie::build(("access_token", token.access_token().secret().to_string()))
+                .expires(None),
+        );
+        Redirect::to(auth_state.config.redirect.clone())
+    }
+}
+
+pub fn get_routes() -> Vec<Route> {
+    routes![keycloak, callback]
 }

@@ -1,21 +1,28 @@
+#![allow(non_snake_case)]
+#![allow(non_local_definitions)]
 #[macro_use]
 extern crate rocket;
+#[macro_use]
+extern crate err_derive;
+
+use std::fmt::Debug;
 pub mod routes;
 
-use std::collections::HashSet;
-
 use jsonwebtoken::*;
-use openidconnect::core::*;
 use openidconnect::core::CoreGenderClaim;
+use openidconnect::core::*;
+use serde::de::DeserializeOwned;
+use std::collections::HashSet;
+use std::env;
 
 use rocket::{
+    Build, Request, Rocket,
     http::Status,
     request::{FromRequest, Outcome},
-    Request
 };
 
-use openidconnect::reqwest;
 use openidconnect::AdditionalClaims;
+use openidconnect::reqwest;
 use openidconnect::*;
 use serde::{Deserialize, Serialize};
 
@@ -46,35 +53,108 @@ type OpenIDClient<
     HasUserInfoUrl,
 >;
 
-pub struct Config {
-    
-}
+pub struct Config {}
 
 #[derive(Clone)]
 pub struct AuthState {
     pub client: OpenIDClient,
     pub public_key: DecodingKey,
     pub validation: Validation,
+    pub config: OIDCConfig,
+    pub reqwest_client: reqwest::Client,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct KeycloakClaim {
-    groups: Vec<String>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalizedClaim {
+    language: Option<String>,
+    value: String,
 }
 
-impl AdditionalClaims for KeycloakClaim {}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserInfo {
+    address: Option<String>,
+    family_name: String,
+    given_name: String,
+    gender: Option<String>,
+    picture: String,
+    locale: Option<String>,
+}
 
-/// list of claims
-#[derive(Debug, Deserialize, Serialize)]
-pub struct OIDCGuard {
-    pub exp: usize,
-    pub aud: Vec<String>,
-    pub sub: String,
+#[derive(Debug, Clone, Copy, Error)]
+#[error(display = "failed to parse user info: ", _0)]
+pub enum UserInfoErr {
+    #[error(display = "missing given name")]
+    MissingGivenName,
+    #[error(display = "missing family name")]
+    MissingFamilyName,
+    #[error(display = "missing profile picture url")]
+    MissingPicture,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(bound = "T: Serialize + DeserializeOwned")]
+pub struct OIDCGuard<T: CoreClaims>
+where
+    T: Serialize + DeserializeOwned + Debug,
+{
+    pub claims: T,
+    pub userinfo: UserInfo,
     // Include other claims you care about here
 }
 
+pub trait CoreClaims {
+    fn subject(&self) -> &str;
+}
+
+impl<AC: AdditionalClaims, GC: GenderClaim> TryFrom<UserInfoClaims<AC, GC>> for UserInfo {
+    type Error = UserInfoErr;
+    fn try_from(info: UserInfoClaims<AC, GC>) -> Result<UserInfo, Self::Error> {
+        let locale = info.locale();
+        let given_name = match info.given_name() {
+            Some(given_name) => match given_name.get(locale) {
+                Some(name) => name.as_str().to_string(),
+                None => return Err(UserInfoErr::MissingGivenName),
+            },
+            None => return Err(UserInfoErr::MissingGivenName),
+        };
+        let family_name = match info.family_name() {
+            Some(family_name) => match family_name.get(locale) {
+                Some(name) => name.as_str().to_string(),
+                None => return Err(UserInfoErr::MissingFamilyName),
+            },
+            None => return Err(UserInfoErr::MissingFamilyName),
+        };
+        let picture = match info.given_name() {
+            Some(picture) => match picture.get(locale) {
+                Some(pic) => pic.as_str().to_string(),
+                None => return Err(UserInfoErr::MissingPicture),
+            },
+            None => return Err(UserInfoErr::MissingPicture),
+        };
+        Ok(UserInfo {
+            address: None,
+            gender: None,
+            locale: locale.map_or_else(|| None, |v| Some(v.as_str().to_string())),
+            given_name,
+            family_name,
+            picture,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddClaims {}
+impl AdditionalClaims for AddClaims {}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PronounClaim {}
+
+impl GenderClaim for PronounClaim {}
+
 #[rocket::async_trait]
-impl<'r> FromRequest<'r> for OIDCGuard {
+impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims> FromRequest<'r>
+    for OIDCGuard<T>
+{
     type Error = ();
 
     async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
@@ -82,20 +162,39 @@ impl<'r> FromRequest<'r> for OIDCGuard {
         let auth = req.rocket().state::<AuthState>().unwrap().clone();
 
         if let Some(access_token) = cookies.get("access_token") {
-            let token_data =
-                decode::<OIDCGuard>(access_token.value(), &auth.public_key, &auth.validation);
+            let token_data = decode::<T>(access_token.value(), &auth.public_key, &auth.validation);
 
             match token_data {
-                Ok(data) => Outcome::Success(data.claims),
-                Err(err) => {
-                    eprintln!(
-                        "Token validation failed: {}, {:?}, {}",
-                        err,
-                        auth.validation,
-                        access_token.value()
-                    );
-                    Outcome::Forward(Status::Forbidden)
+                Ok(data) => {
+                    let userinfo_result: Result<UserInfoClaims<AddClaims, PronounClaim>, _> = auth
+                        .client
+                        .user_info(
+                            AccessToken::new(access_token.value().to_string()),
+                            Some(SubjectIdentifier::new(data.claims.subject().to_string())),
+                        )
+                        .unwrap()
+                        .request_async(&auth.reqwest_client)
+                        .await;
+
+                    match userinfo_result {
+                        Ok(userinfo) => Outcome::Success(OIDCGuard {
+                            claims: data.claims,
+                            userinfo: UserInfo::try_from(userinfo).unwrap(),
+                        }),
+                        Err(e) => {
+                            eprintln!("Failed to fetch userinfo: {:?}", e);
+                            Outcome::Forward(Status::Unauthorized)
+                        }
+                    }
                 }
+                Err(err) => {
+                    let _ExpiredSignature = err;
+                    {
+                        cookies.remove("access_token");
+                        Outcome::Forward(Status::Unauthorized)
+                    }
+                    
+                },
             }
         } else {
             Outcome::Forward(Status::Unauthorized)
@@ -103,14 +202,15 @@ impl<'r> FromRequest<'r> for OIDCGuard {
     }
 }
 
-pub async fn keycloak_oidc_auth(client_id: String, client_secret: String, issuer_url: String) -> Result<AuthState, Box<dyn std::error::Error>> {
+pub async fn from_keycloak_oidc_config(
+    config: OIDCConfig,
+) -> Result<AuthState, Box<dyn std::error::Error>> {
+    let client_id = config.client_id.clone();
+    let client_secret = config.client_secret.clone();
+    let issuer_url = config.issuer_url.clone();
 
-    let client_id = ClientId::new(
-        client_id
-    );
-    let client_secret = ClientSecret::new(
-        client_secret
-    );
+    let client_id = ClientId::new(client_id);
+    let client_secret = ClientSecret::new(client_secret);
     let issuer_url = IssuerUrl::new(issuer_url)?;
 
     let http_client = reqwest::ClientBuilder::new()
@@ -121,21 +221,23 @@ pub async fn keycloak_oidc_auth(client_id: String, client_secret: String, issuer
             unreachable!();
         });
 
-    // Fetch GitLab's OpenID Connect discovery document.
+    // fetch discovery document
     let provider_metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
         .await
-        .unwrap_or_else(|_err| {
-            unreachable!();
+        .unwrap_or_else(|err| {
+            panic!("error: {}", err);
+            
         });
 
     let jwks_uri = provider_metadata.jwks_uri().to_string();
-    
+
     // Fetch JSON Web Key Set (JWKS) from the provider
-    let jwks: serde_json::Value = serde_json::from_str(&reqwest::get(jwks_uri).await.unwrap().text().await.unwrap()).unwrap();
-    
+    let jwks: serde_json::Value =
+        serde_json::from_str(&reqwest::get(jwks_uri).await.unwrap().text().await.unwrap()).unwrap();
+
     // Assuming you have the correct key in JWKS for verification
     //let jwk = &jwks["keys"][0]; // Adjust based on the actual structure of the JWKS
-    
+
     // Decode and verify the JWT
     let mut validation = Validation::new(Algorithm::RS256);
     //validation.insecure_disable_signature_validation();
@@ -149,29 +251,37 @@ pub async fn keycloak_oidc_auth(client_id: String, client_secret: String, issuer
         validation.algorithms = vec![Algorithm::RS256];
     };
 
-    let mut jwtkeys = jwks["keys"].as_array().unwrap().iter().filter(|v| v["alg"] == "RS256").collect::<Vec<&serde_json::Value>>();
+    let mut jwtkeys = jwks["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|v| v["alg"] == "RS256")
+        .collect::<Vec<&serde_json::Value>>();
     println!("keys: {:?}", jwtkeys);
     let jwk = jwtkeys.pop().unwrap();
     // Public key from the JWKS
-    let public_key = DecodingKey::from_rsa_components(
-        jwk["n"].as_str().unwrap(),
-        jwk["e"].as_str().unwrap(),
-    ).unwrap();
+    let public_key =
+        DecodingKey::from_rsa_components(jwk["n"].as_str().unwrap(), jwk["e"].as_str().unwrap())
+            .unwrap();
     // Set up the config for the GitLab OAuth2 process.
-    let client = CoreClient::from_provider_metadata(
-        provider_metadata,
-        client_id,
-        Some(client_secret),
-    )
-    // This example will be running its own server at localhost:8080.
-    // See below for the server implementation.
-    .set_redirect_uri(
-        RedirectUrl::new("http://qrespite.org:8000/callback/".to_string()).unwrap_or_else(|_err| {
-            unreachable!();
-        }),
-    );
+    let client =
+        CoreClient::from_provider_metadata(provider_metadata, client_id, Some(client_secret))
+            // This example will be running its own server at localhost:8080.
+            // See below for the server implementation.
+            .set_redirect_uri(
+                RedirectUrl::new("http://qrespite.org:8000/auth/callback/".to_string())
+                    .unwrap_or_else(|_err| {
+                        unreachable!();
+                    }),
+            );
 
-    Ok(AuthState { client, public_key, validation })
+    Ok(AuthState {
+        client,
+        public_key,
+        validation,
+        config,
+        reqwest_client: http_client,
+    })
 }
 
 fn hashset_from<T: std::cmp::Eq + std::hash::Hash>(vals: Vec<T>) -> HashSet<T> {
@@ -180,4 +290,62 @@ fn hashset_from<T: std::cmp::Eq + std::hash::Hash>(vals: Vec<T>) -> HashSet<T> {
         set.insert(val);
     }
     set
+}
+
+#[derive(Debug, Clone, Error)]
+#[error(display = "failed to start rocket OIDC routes: {}", _0)]
+pub enum Error {
+    #[error(display = "missing client id")]
+    MissingClientId,
+    #[error(display = "missing client secret")]
+    MissingClientSecret,
+    #[error(display = "missing issuer url")]
+    MissingIssuerUrl,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OIDCConfig {
+    client_id: String,
+    client_secret: String,
+    issuer_url: String,
+    redirect: String,
+}
+
+impl OIDCConfig {
+    pub fn from_env() -> Result<Self, Error> {
+        let client_id = match env::var("CLIENT_ID") {
+            Ok(client_id) => client_id,
+            _ => return Err(Error::MissingClientId),
+        };
+        let client_secret = match env::var("CLIENT_SECRET") {
+            Ok(secret) => secret,
+            _ => return Err(Error::MissingClientSecret),
+        };
+        let issuer_url = match env::var("ISSUER_URL") {
+            Ok(url) => url,
+            _ => return Err(Error::MissingIssuerUrl),
+        };
+
+        let redirect = match env::var("REDIRECT_URL") {
+            Ok(redirect) => redirect,
+            _ => String::from("/profile"),
+        };
+
+        Ok(Self {
+            client_id,
+            client_secret,
+            issuer_url,
+            redirect,
+        })
+    }
+}
+
+pub async fn setup(
+    rocket: rocket::Rocket<Build>,
+    config: OIDCConfig,
+) -> Result<Rocket<Build>, Box<dyn std::error::Error>> {
+    let auth_state = from_keycloak_oidc_config(config).await?;
+    Ok(rocket
+        .manage(auth_state)
+        .mount("/auth", routes::get_routes()))
 }
