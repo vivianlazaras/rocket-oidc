@@ -269,7 +269,7 @@ pub async fn from_keycloak_oidc_config(
             // This example will be running its own server at localhost:8080.
             // See below for the server implementation.
             .set_redirect_uri(
-                RedirectUrl::new("http://qrespite.org:8000/auth/callback/".to_string())
+                RedirectUrl::new(format!("http://{}:8000/auth/callback/", config.redirect))
                     .unwrap_or_else(|_err| {
                         unreachable!();
                     }),
