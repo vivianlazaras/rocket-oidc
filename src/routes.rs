@@ -36,10 +36,6 @@ pub async fn callback(
         // I should check to make sure the token hasn't expired
         Ok(Redirect::to(auth_state.config.redirect.clone()))
     } else {
-        let http_client = reqwest::ClientBuilder::new()
-            // Following redirects opens the client up to SSRF vulnerabilities.
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
 
         let token = auth_state
             .client
