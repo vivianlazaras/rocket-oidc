@@ -11,15 +11,18 @@ pub mod routes;
 use jsonwebtoken::*;
 use openidconnect::core::CoreGenderClaim;
 use openidconnect::core::*;
-use serde::de::DeserializeOwned;
-use std::collections::HashSet;
-use std::env;
-
+use rocket::http::ContentType;
+use rocket::response;
+use rocket::response::Responder;
 use rocket::{
     Build, Request, Rocket,
     http::Status,
     request::{FromRequest, Outcome},
 };
+use serde::de::DeserializeOwned;
+use std::collections::HashSet;
+use std::env;
+use std::io::Cursor;
 
 use openidconnect::AdditionalClaims;
 use openidconnect::reqwest;
@@ -291,7 +294,23 @@ fn hashset_from<T: std::cmp::Eq + std::hash::Hash>(vals: Vec<T>) -> HashSet<T> {
     set
 }
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Error, Responder)]
+#[error(display = "encountered error during route handling: {}", _0)]
+pub enum RouteError {
+    #[error(display = "reqwest error: {}", _0)]
+    #[response(status = 500)]
+    Reqwest(String),
+    #[error(display = "OIDC configuration error: {}", _0)]
+    #[response(status = 500)]
+    ConfigurationError(String),
+}
+
+pub type TokenErr = RequestTokenError<
+    HttpClientError<reqwest::Error>,
+    openidconnect::StandardErrorResponse<openidconnect::core::CoreErrorResponseType>,
+>;
+
+#[derive(Debug, Error)]
 #[error(display = "failed to start rocket OIDC routes: {}", _0)]
 pub enum Error {
     #[error(display = "missing client id")]
@@ -300,6 +319,31 @@ pub enum Error {
     MissingClientSecret,
     #[error(display = "missing issuer url")]
     MissingIssuerUrl,
+    #[error(display = "failed to fetch: {}", _0)]
+    Reqwest(#[error(source)] reqwest::Error),
+    #[error(display = "openidconnect configuration error: {}", _0)]
+    ConfigurationError(#[error(source)] ConfigurationError),
+    #[error(display = "token validation error: {}", _0)]
+    TokenError(#[error(source)] TokenErr),
+}
+
+impl<'r> Responder<'r, 'static> for Error {
+    fn respond_to(self, _request: &'r Request<'_>) -> response::Result<'static> {
+        let body = self.to_string();
+        let status = match &self {
+            Error::MissingClientId | Error::MissingClientSecret | Error::MissingIssuerUrl => {
+                Status::BadRequest
+            }
+            Error::Reqwest(_) | Error::ConfigurationError(_) => Status::InternalServerError,
+            Error::TokenError(_) => Status::Unauthorized,
+        };
+
+        response::Response::build()
+            .status(status)
+            .header(ContentType::Plain)
+            .sized_body(body.len(), Cursor::new(body))
+            .ok()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

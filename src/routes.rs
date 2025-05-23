@@ -2,7 +2,6 @@
 use rocket::{Route, State, response::Redirect, routes};
 
 use crate::AuthState;
-
 use openidconnect::{AuthorizationCode, OAuth2TokenResponse, core::CoreResponseType};
 
 use rocket::http::{Cookie, CookieJar};
@@ -31,33 +30,27 @@ pub async fn callback(
     auth_state: &State<AuthState>,
     code: String,
     _state: String,
-) -> Redirect {
+) -> Result<Redirect, crate::Error> {
     if let Some(_access_token) = jar.get("access_token") {
-        Redirect::to(auth_state.config.redirect.clone())
+        // I should check to make sure the token hasn't expired
+        Ok(Redirect::to(auth_state.config.redirect.clone()))
     } else {
         let http_client = reqwest::ClientBuilder::new()
             // Following redirects opens the client up to SSRF vulnerabilities.
             .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap_or_else(|_err| {
-                unreachable!();
-            });
+            .build()?;
 
         let token = auth_state
             .client
-            .exchange_code(AuthorizationCode::new(code))
-            .unwrap()
+            .exchange_code(AuthorizationCode::new(code))?
             .request_async(&http_client)
-            .await
-            .unwrap_or_else(|err| {
-                panic!("error: {:?}", err);
-            });
+            .await?;
 
         jar.add(
             Cookie::build(("access_token", token.access_token().secret().to_string()))
                 .expires(None),
         );
-        Redirect::to(auth_state.config.redirect.clone())
+        Ok(Redirect::to(auth_state.config.redirect.clone()))
     }
 }
 
