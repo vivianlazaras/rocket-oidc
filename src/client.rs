@@ -2,14 +2,6 @@ use crate::{AddClaims, PronounClaim};
 use jsonwebtoken::*;
 use openidconnect::core::CoreGenderClaim;
 use openidconnect::core::*;
-use rocket::http::ContentType;
-use rocket::response;
-use rocket::response::Responder;
-use rocket::{
-    Build, Request, Rocket,
-    http::Status,
-    request::{FromRequest, Outcome},
-};
 
 use crate::CoreClaims;
 use std::fmt::Debug;
@@ -18,16 +10,13 @@ use crate::OIDCConfig;
 
 use serde::de::DeserializeOwned;
 use std::collections::HashSet;
-use std::env;
-use std::io::Cursor;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use crate::token::*;
 use tokio::{fs::File, io::AsyncReadExt};
 
-use openidconnect::AdditionalClaims;
 use openidconnect::reqwest;
 use openidconnect::*;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 pub type OpenIDClient<
     HasDeviceAuthUrl = EndpointNotSet,
@@ -160,7 +149,7 @@ impl OIDCClient {
     pub async fn from_oidc_config(
         config: &OIDCConfig,
     ) -> Result<(Self, Validator), Box<dyn std::error::Error>> {
-        let config = WorkingConfig::from_oidc_config(&config).await?;
+        let config = WorkingConfig::from_oidc_config(config).await?;
 
         let http_client = match reqwest::ClientBuilder::new()
             // Following redirects opens the client up to SSRF vulnerabilities.

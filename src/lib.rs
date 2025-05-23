@@ -65,11 +65,8 @@ pub mod client;
 pub mod routes;
 pub mod token;
 
-use client::{OIDCClient, OpenIDClient, Validator};
+use client::{OIDCClient, Validator};
 
-use jsonwebtoken::*;
-use openidconnect::core::CoreGenderClaim;
-use openidconnect::core::*;
 use rocket::http::ContentType;
 use rocket::response;
 use rocket::response::Responder;
@@ -79,12 +76,10 @@ use rocket::{
     request::{FromRequest, Outcome},
 };
 use serde::de::DeserializeOwned;
-use std::collections::HashSet;
 use std::env;
 use std::io::Cursor;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use tokio::{fs::File, io::AsyncReadExt};
 
 use openidconnect::AdditionalClaims;
 use openidconnect::reqwest;

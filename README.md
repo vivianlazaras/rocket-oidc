@@ -57,10 +57,18 @@ async fn protected(guard: Guard) -> RawHtml<String> {
     RawHtml(format!("<h1>Hello {} {}</h1>", userinfo.given_name(), userinfo.family_name()))
 }
 
+// this is an example route that exchanges tokens to use a different audiance
+// so that the API backend can access user data.
+#[post("/use-api")]
+async fn use_api(auth: &State<rocket_oidc::AuthState>) {
+    let access_token = auth.client.exchange_token();
+    // then use the token
+}
+
 #[launch]
 async fn rocket() -> _ {
     let mut rocket = rocket::build()
-        .mount("/", routes![index])
+        .mount("/", routes![index, use_api])
         .register("/", catchers![unauthorized]);
         
     rocket_oidc::setup(rocket, OIDCConfig::from_env().unwrap())
@@ -80,6 +88,8 @@ export REDIRECT_URI="http://callback_url.com/"
 
 ## Change Log
 1. Refactor so OIDCConfig uses a path to secret rather than storing the secret itself.
+2. Refactor to add client module, and make code more modular.
+3. Added support for token exchange.
 
 ## Security
 This crate is not audited, and is very much as work in progress, as such its security cannot be garunteed.

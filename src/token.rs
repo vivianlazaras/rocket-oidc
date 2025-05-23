@@ -10,6 +10,28 @@ pub struct TokenExchangeResponse {
     issued_token_type: Option<String>,
 }
 
+impl TokenExchangeResponse {
+    pub fn access_token(&self) -> &str {
+        &self.access_token
+    }
+
+    pub fn token_type(&self) -> &str {
+        &self.token_type
+    }
+
+    pub fn issued_token_type(&self) -> &Option<String> {
+        &self.issued_token_type
+    }
+
+    pub fn expires(&self) -> u64 {
+        self.expires_in
+    }
+
+    pub fn scope(&self) -> &Option<String> {
+        &self.scope
+    }
+}
+
 pub(crate) async fn perform_token_exchange(
     token_endpoint: &str,
     client_id: &str,
