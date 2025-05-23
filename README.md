@@ -3,20 +3,26 @@ This crate provides OIDC authentication for rocket, and the routes needed to acc
 
 This is a simple utility crate that provides a FromRequest implementation, including fetching user data.
 
+## Supported Features
+1. Handle Basic Authentication Claims
+2. Request User Info for User Info EndPoint
+3. Implement a FromRequest type to use in rocket routes.
+4. Handle JavaScript Web Token Validation
+
+### Supported OIDC Providers
+1. Keycloak.
+
 ## Usage
 
 ```rust
 
-use storyteller::stories::{AccountBtn, StoryTitle};
-use storyteller::ApiClient;
+use serde_derive::{Serialize, Deserialize};
+use rocket::{catch, catchers, routes, launch, get};
+
 use rocket::State;
 use rocket::fs::FileServer;
 use rocket::response::{Redirect, content::RawHtml};
-use rocket_dyn_templates::{Template, context};
-use rocket_oidc::OIDCConfig;
-use sled::Tree;
-use std::str::FromStr;
-use uuid::Uuid;
+use rocket_oidc::{OIDCConfig, CoreClaims, OIDCGuard};
 
 #[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug)]
@@ -48,16 +54,14 @@ async fn index() -> RawHtml<String> {
 #[get("/protected")]
 async fn protected(guard: Guard) -> RawHtml<String> {
     let userinfo = guard.userinfo;
-    RawHtml(foramt!("<h1>Hello {} {}</h1>", userinfo.given_name, userinfo.family_nameR))
+    RawHtml(format!("<h1>Hello {} {}</h1>", userinfo.given_name(), userinfo.family_name()))
 }
 
-use rocket_oidc::{OIDCConfig, }
 #[launch]
 async fn rocket() -> _ {
     let mut rocket = rocket::build()
-        .manage(api)
         .mount("/", routes![index])
-        .register("/", catchers![unauthorized])
+        .register("/", catchers![unauthorized]);
         
     rocket_oidc::setup(rocket, OIDCConfig::from_env().unwrap())
         .await

@@ -1,5 +1,60 @@
 #![allow(non_snake_case)]
 #![allow(non_local_definitions)]
+/*!
+```rust
+use serde_derive::{Serialize, Deserialize};
+use rocket::{catch, catchers, routes, launch, get};
+
+use rocket::State;
+use rocket::fs::FileServer;
+use rocket::response::{Redirect, content::RawHtml};
+use rocket_oidc::{OIDCConfig, CoreClaims, OIDCGuard};
+
+#[non_exhaustive]
+#[derive(Serialize, Deserialize, Debug)]
+pub struct UserGuard {
+    pub email: String,
+    pub sub: String,
+    pub picture: Option<String>,
+    pub email_verified: Option<bool>,
+}
+
+impl CoreClaims for UserGuard {
+    fn subject(&self) -> &str {
+        self.sub.as_str()
+    }
+}
+
+pub type Guard = OIDCGuard<UserGuard>;
+
+#[catch(401)]
+fn unauthorized() -> Redirect {
+    Redirect::to("/")
+}
+
+#[get("/")]
+async fn index() -> RawHtml<String> {
+    RawHtml(format!("<h1>Hello World</h1>"))
+}
+
+#[get("/protected")]
+async fn protected(guard: Guard) -> RawHtml<String> {
+    let userinfo = guard.userinfo;
+    RawHtml(format!("<h1>Hello {} {}</h1>", userinfo.given_name(), userinfo.family_name()))
+}
+
+#[launch]
+async fn rocket() -> _ {
+    let mut rocket = rocket::build()
+        .mount("/", routes![index])
+        .register("/", catchers![unauthorized]);
+        
+    rocket_oidc::setup(rocket, OIDCConfig::from_env().unwrap())
+        .await
+        .unwrap()
+}
+```
+*/
 #[macro_use]
 extern crate rocket;
 #[macro_use]
@@ -81,6 +136,16 @@ pub struct UserInfo {
     gender: Option<String>,
     picture: String,
     locale: Option<String>,
+}
+
+impl UserInfo {
+    pub fn family_name(&self) -> &str {
+        &self.family_name
+    }
+
+    pub fn given_name(&self) -> &str {
+        &self.given_name
+    }
 }
 
 #[derive(Debug, Clone, Copy, Error)]
