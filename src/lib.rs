@@ -193,8 +193,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
                         cookies.remove("access_token");
                         Outcome::Forward(Status::Unauthorized)
                     }
-                    
-                },
+                }
             }
         } else {
             Outcome::Forward(Status::Unauthorized)
@@ -213,21 +212,21 @@ pub async fn from_keycloak_oidc_config(
     let client_secret = ClientSecret::new(client_secret);
     let issuer_url = IssuerUrl::new(issuer_url)?;
 
-    let http_client = reqwest::ClientBuilder::new()
+    let http_client = match reqwest::ClientBuilder::new()
         // Following redirects opens the client up to SSRF vulnerabilities.
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_else(|_err| {
-            unreachable!();
-        });
+    {
+        Ok(client) => client,
+        Err(e) => return Err(Box::new(e)),
+    };
 
     // fetch discovery document
-    let provider_metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
-        .await
-        .unwrap_or_else(|err| {
-            panic!("error: {}", err);
-            
-        });
+    let provider_metadata =
+        match CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client).await {
+            Ok(provider_metadata) => provider_metadata,
+            Err(e) => return Err(Box::new(e)),
+        };
 
     let jwks_uri = provider_metadata.jwks_uri().to_string();
 
@@ -305,10 +304,10 @@ pub enum Error {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OIDCConfig {
-    client_id: String,
-    client_secret: String,
-    issuer_url: String,
-    redirect: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub issuer_url: String,
+    pub redirect: String,
 }
 
 impl OIDCConfig {
