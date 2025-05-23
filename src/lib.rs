@@ -312,6 +312,19 @@ pub struct OIDCConfig {
     pub redirect: String,
 }
 
+/// please note this is just an example, and should not be used in production builds
+/// rather `from_env` should be used instead.
+impl Default for OIDCConfig {
+    fn default() -> OIDCConfig {
+        Self {
+            client_id: "storyteller".to_string(),
+            client_secret: "./secret".to_string(),
+            issuer_url: "http://keycloak.com/realms/master".to_string(),
+            redirect: "http://localhost:8000/"
+        }
+    }
+}
+
 impl OIDCConfig {
     pub fn from_env() -> Result<Self, Error> {
         let client_id = match env::var("CLIENT_ID") {
