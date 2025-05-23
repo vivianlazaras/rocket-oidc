@@ -48,7 +48,7 @@ async fn rocket() -> _ {
     let mut rocket = rocket::build()
         .mount("/", routes![index])
         .register("/", catchers![unauthorized]);
-        
+
     rocket_oidc::setup(rocket, OIDCConfig::from_env().unwrap())
         .await
         .unwrap()
@@ -61,7 +61,11 @@ extern crate rocket;
 extern crate err_derive;
 
 use std::fmt::Debug;
+pub mod client;
 pub mod routes;
+pub mod token;
+
+use client::{OIDCClient, OpenIDClient, Validator};
 
 use jsonwebtoken::*;
 use openidconnect::core::CoreGenderClaim;
@@ -78,7 +82,7 @@ use serde::de::DeserializeOwned;
 use std::collections::HashSet;
 use std::env;
 use std::io::Cursor;
-use std::path::{PathBuf, Path};
+use std::path::{Path, PathBuf};
 
 use tokio::{fs::File, io::AsyncReadExt};
 
@@ -87,42 +91,13 @@ use openidconnect::reqwest;
 use openidconnect::*;
 use serde::{Deserialize, Serialize};
 
-type OpenIDClient<
-    HasDeviceAuthUrl = EndpointNotSet,
-    HasIntrospectionUrl = EndpointNotSet,
-    HasRevocationUrl = EndpointNotSet,
-    HasAuthUrl = EndpointSet,
-    HasTokenUrl = EndpointMaybeSet,
-    HasUserInfoUrl = EndpointMaybeSet,
-> = openidconnect::Client<
-    EmptyAdditionalClaims,
-    CoreAuthDisplay,
-    CoreGenderClaim,
-    CoreJweContentEncryptionAlgorithm,
-    CoreJsonWebKey,
-    CoreAuthPrompt,
-    StandardErrorResponse<CoreErrorResponseType>,
-    CoreTokenResponse,
-    CoreTokenIntrospectionResponse,
-    CoreRevocableToken,
-    CoreRevocationErrorResponse,
-    HasAuthUrl,
-    HasDeviceAuthUrl,
-    HasIntrospectionUrl,
-    HasRevocationUrl,
-    HasTokenUrl,
-    HasUserInfoUrl,
->;
-
 pub struct Config {}
 
 #[derive(Clone)]
 pub struct AuthState {
-    pub client: OpenIDClient,
-    pub public_key: DecodingKey,
-    pub validation: Validation,
+    pub validator: Validator,
+    pub client: OIDCClient,
     pub config: OIDCConfig,
-    pub reqwest_client: reqwest::Client,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,7 +208,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
         let auth = req.rocket().state::<AuthState>().unwrap().clone();
 
         if let Some(access_token) = cookies.get("access_token") {
-            let token_data = decode::<T>(access_token.value(), &auth.public_key, &auth.validation);
+            let token_data = auth.validator.decode::<T>(access_token.value());
 
             match token_data {
                 Ok(data) => {
@@ -243,8 +218,6 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
                             AccessToken::new(access_token.value().to_string()),
                             Some(SubjectIdentifier::new(data.claims.subject().to_string())),
                         )
-                        .unwrap()
-                        .request_async(&auth.reqwest_client)
                         .await;
 
                     match userinfo_result {
@@ -272,101 +245,16 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
     }
 }
 
-async fn laod_client_secret<P: AsRef<Path>>(secret_file: P) -> Result<ClientSecret, std::io::Error> {
-    let mut file = File::open(secret_file.as_ref()).await?;
-    let mut contents = Vec::new();
-    file.read_to_end(&mut contents).await?;
-    let secret = String::from_utf8(contents).unwrap();
-    Ok(ClientSecret::new(secret))
-}
-
 pub async fn from_keycloak_oidc_config(
     config: OIDCConfig,
 ) -> Result<AuthState, Box<dyn std::error::Error>> {
-    let client_id = config.client_id.clone();
-    let issuer_url = config.issuer_url.clone();
-
-    let client_id = ClientId::new(client_id);
-    let client_secret = laod_client_secret(&config.client_secret).await?;
-    let issuer_url = IssuerUrl::new(issuer_url)?;
-
-    let http_client = match reqwest::ClientBuilder::new()
-        // Following redirects opens the client up to SSRF vulnerabilities.
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-    {
-        Ok(client) => client,
-        Err(e) => return Err(Box::new(e)),
-    };
-
-    // fetch discovery document
-    let provider_metadata =
-        match CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client).await {
-            Ok(provider_metadata) => provider_metadata,
-            Err(e) => return Err(Box::new(e)),
-        };
-
-    let jwks_uri = provider_metadata.jwks_uri().to_string();
-
-    // Fetch JSON Web Key Set (JWKS) from the provider
-    let jwks: serde_json::Value =
-        serde_json::from_str(&reqwest::get(jwks_uri).await.unwrap().text().await.unwrap()).unwrap();
-
-    // Assuming you have the correct key in JWKS for verification
-    //let jwk = &jwks["keys"][0]; // Adjust based on the actual structure of the JWKS
-
-    // Decode and verify the JWT
-    let mut validation = Validation::new(Algorithm::RS256);
-    //validation.insecure_disable_signature_validation();
-    {
-        validation.leeway = 100; // Optionally, allow some leeway
-        validation.validate_exp = true;
-        validation.validate_aud = true;
-        validation.validate_nbf = true;
-        validation.aud = Some(hashset_from(vec!["account".to_string()])); // The audience should match your client ID
-        validation.iss = Some(hashset_from(vec![issuer_url.to_string()])); // Validate the issuer
-        validation.algorithms = vec![Algorithm::RS256];
-    };
-
-    let mut jwtkeys = jwks["keys"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|v| v["alg"] == "RS256")
-        .collect::<Vec<&serde_json::Value>>();
-    println!("keys: {:?}", jwtkeys);
-    let jwk = jwtkeys.pop().unwrap();
-    // Public key from the JWKS
-    let public_key =
-        DecodingKey::from_rsa_components(jwk["n"].as_str().unwrap(), jwk["e"].as_str().unwrap())
-            .unwrap();
-    // Set up the config for the GitLab OAuth2 process.
-    let client =
-        CoreClient::from_provider_metadata(provider_metadata, client_id, Some(client_secret))
-            // This example will be running its own server at localhost:8080.
-            // See below for the server implementation.
-            .set_redirect_uri(
-                RedirectUrl::new(format!("http://{}/auth/callback/", config.redirect))
-                    .unwrap_or_else(|_err| {
-                        unreachable!();
-                    }),
-            );
+    let (client, validator) = OIDCClient::from_oidc_config(&config).await?;
 
     Ok(AuthState {
         client,
-        public_key,
-        validation,
+        validator,
         config,
-        reqwest_client: http_client,
     })
-}
-
-fn hashset_from<T: std::cmp::Eq + std::hash::Hash>(vals: Vec<T>) -> HashSet<T> {
-    let mut set = HashSet::new();
-    for val in vals.into_iter() {
-        set.insert(val);
-    }
-    set
 }
 
 #[derive(Debug, Error, Responder)]

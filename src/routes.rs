@@ -12,6 +12,7 @@ use openidconnect::{AuthenticationFlow, CsrfToken, Nonce, Scope};
 pub async fn keycloak(auth_state: &State<AuthState>) -> Redirect {
     let (authorize_url, _csrf_state, _nonce) = auth_state
         .client
+        .client
         .authorize_url(
             AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
             CsrfToken::new_random,
@@ -42,8 +43,7 @@ pub async fn callback(
 
         let token = auth_state
             .client
-            .exchange_code(AuthorizationCode::new(code))?
-            .request_async(&http_client)
+            .exchange_code(AuthorizationCode::new(code))
             .await?;
 
         jar.add(
