@@ -318,9 +318,9 @@ impl Default for OIDCConfig {
     fn default() -> OIDCConfig {
         Self {
             client_id: "storyteller".to_string(),
-            client_secret: "./secret".to_string(),
+            client_secret: "./secret".into(),
             issuer_url: "http://keycloak.com/realms/master".to_string(),
-            redirect: "http://localhost:8000/"
+            redirect: "http://localhost:8000/".to_string(),
         }
     }
 }
