@@ -74,6 +74,12 @@ async fn rocket() -> _ {
 ```sh
 export ISSUER_URL="https://keycloak.com/realms/master" 
 export CLIENT_ID="my_app_client_id"
-export CLIENT_SECRET="<my_super_secret_client_secret>"
+export CLIENT_SECRET="/path/to/client/secret"
 export REDIRECT_URI="http://callback_url.com/"
 ```
+
+## Change Log
+1. Refactor so OIDCConfig uses a path to secret rather than storing the secret itself.
+
+## Security
+This crate is not audited, and is very much as work in progress, as such its security cannot be garunteed.

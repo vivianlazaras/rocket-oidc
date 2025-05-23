@@ -78,6 +78,9 @@ use serde::de::DeserializeOwned;
 use std::collections::HashSet;
 use std::env;
 use std::io::Cursor;
+use std::path::{PathBuf, Path};
+
+use tokio::{fs::File, io::AsyncReadExt};
 
 use openidconnect::AdditionalClaims;
 use openidconnect::reqwest;
@@ -269,15 +272,22 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
     }
 }
 
+async fn laod_client_secret<P: AsRef<Path>>(secret_file: P) -> Result<ClientSecret, std::io::Error> {
+    let mut file = File::open(secret_file.as_ref()).await?;
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents).await?;
+    let secret = String::from_utf8(contents).unwrap();
+    Ok(ClientSecret::new(secret))
+}
+
 pub async fn from_keycloak_oidc_config(
     config: OIDCConfig,
 ) -> Result<AuthState, Box<dyn std::error::Error>> {
     let client_id = config.client_id.clone();
-    let client_secret = config.client_secret.clone();
     let issuer_url = config.issuer_url.clone();
 
     let client_id = ClientId::new(client_id);
-    let client_secret = ClientSecret::new(client_secret);
+    let client_secret = laod_client_secret(&config.client_secret).await?;
     let issuer_url = IssuerUrl::new(issuer_url)?;
 
     let http_client = match reqwest::ClientBuilder::new()
@@ -414,7 +424,7 @@ impl<'r> Responder<'r, 'static> for Error {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OIDCConfig {
     pub client_id: String,
-    pub client_secret: String,
+    pub client_secret: PathBuf,
     pub issuer_url: String,
     pub redirect: String,
 }
@@ -426,7 +436,7 @@ impl OIDCConfig {
             _ => return Err(Error::MissingClientId),
         };
         let client_secret = match env::var("CLIENT_SECRET") {
-            Ok(secret) => secret,
+            Ok(secret) => secret.into(),
             _ => return Err(Error::MissingClientSecret),
         };
         let issuer_url = match env::var("ISSUER_URL") {
