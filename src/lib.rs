@@ -66,7 +66,7 @@ pub mod routes;
 pub mod token;
 
 use client::{OIDCClient, Validator};
-
+use rocket::http::Cookie;
 use rocket::http::ContentType;
 use rocket::response;
 use rocket::response::Responder;
@@ -230,7 +230,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
                     eprintln!("assuming token expired with error: {}", err);
                     let _ExpiredSignature = err;
                     {
-                        cookies.remove("access_token");
+                        cookies.remove(Cookie::named("access_token"));
                         Outcome::Forward(Status::Unauthorized)
                     }
                 }
