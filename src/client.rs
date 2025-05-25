@@ -57,9 +57,10 @@ async fn laod_client_secret<P: AsRef<Path>>(
 ) -> Result<ClientSecret, std::io::Error> {
     let mut file = File::open(secret_file.as_ref()).await?;
     let mut contents = String::new();
+    
+    file.read_to_string(&mut contents).await?;
     #[cfg(debug_assertions)]
     println!("using secret: {}", contents);
-    file.read_to_string(&mut contents).await?;
     Ok(ClientSecret::new(contents))
 }
 
