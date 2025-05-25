@@ -57,7 +57,7 @@ pub(crate) async fn perform_token_exchange(
     // Optional, test with or without audience
     params.insert("audience", audience);
 
-
+    println!("params: {:?}", params);
     let resp = client
         .post(token_endpoint)
         .form(&params)
