@@ -227,6 +227,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
                     }
                 }
                 Err(err) => {
+                    eprintln!("assuming token expired with error: {}", err);
                     let _ExpiredSignature = err;
                     {
                         cookies.remove("access_token");
@@ -235,6 +236,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
                 }
             }
         } else {
+            eprintln!("no access token found");
             Outcome::Forward(Status::Unauthorized)
         }
     }
