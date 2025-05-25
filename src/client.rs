@@ -56,10 +56,11 @@ async fn laod_client_secret<P: AsRef<Path>>(
     secret_file: P,
 ) -> Result<ClientSecret, std::io::Error> {
     let mut file = File::open(secret_file.as_ref()).await?;
-    let mut contents = Vec::new();
-    file.read_to_end(&mut contents).await?;
-    let secret = String::from_utf8(contents).unwrap();
-    Ok(ClientSecret::new(secret))
+    let mut contents = String::new();
+    #[cfg(debug_assertions)]
+    println!("using secret: {}", contents);
+    file.read_to_string(&mut contents).await?;
+    Ok(ClientSecret::new(contents))
 }
 
 fn hashset_from<T: std::cmp::Eq + std::hash::Hash>(vals: Vec<T>) -> HashSet<T> {
