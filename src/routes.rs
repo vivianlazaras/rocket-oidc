@@ -36,7 +36,7 @@ pub async fn callback(
 ) -> Result<Redirect, crate::Error> {
     if let Some(_access_token) = jar.get("access_token") {
         // I should check to make sure the token hasn't expired
-        Ok(Redirect::to(auth_state.config.redirect.clone()))
+        Ok(Redirect::to(auth_state.config.post_login().to_string()))
     } else {
 
         let token = auth_state
@@ -48,7 +48,7 @@ pub async fn callback(
             Cookie::build(("access_token", token.access_token().secret().to_string()))
                 .expires(None),
         );
-        Ok(Redirect::to(auth_state.config.redirect.clone()))
+        Ok(Redirect::to(auth_state.config.post_login().to_string()))
     }
 }
 

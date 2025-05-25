@@ -312,6 +312,7 @@ pub struct OIDCConfig {
     pub client_secret: PathBuf,
     pub issuer_url: String,
     pub redirect: String,
+    pub post_login: Option<String>,
 }
 
 /// please note this is just an example, and should not be used in production builds
@@ -323,11 +324,18 @@ impl Default for OIDCConfig {
             client_secret: "./secret".into(),
             issuer_url: "http://keycloak.com/realms/master".to_string(),
             redirect: "http://localhost:8000/".to_string(),
+            post_login: None,
         }
     }
 }
 
 impl OIDCConfig {
+    pub fn post_login(&self) -> &str {
+        match &self.post_login {
+            Some(url) => &url,
+            None => "/"
+        }
+    }
     pub fn from_env() -> Result<Self, Error> {
         let client_id = match env::var("CLIENT_ID") {
             Ok(client_id) => client_id,
@@ -352,6 +360,7 @@ impl OIDCConfig {
             client_secret,
             issuer_url,
             redirect,
+            post_login: None
         })
     }
 }
