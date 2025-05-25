@@ -52,6 +52,10 @@ fn join_url(root: &str, route: &str) -> Result<String, url::ParseError> {
     Ok(joined.into())
 }
 
+fn trim_trailing_whitespace(s: &str) -> String {
+    s.trim_end().to_string()
+}
+
 async fn laod_client_secret<P: AsRef<Path>>(
     secret_file: P,
 ) -> Result<ClientSecret, std::io::Error> {
@@ -59,9 +63,10 @@ async fn laod_client_secret<P: AsRef<Path>>(
     let mut contents = String::new();
     
     file.read_to_string(&mut contents).await?;
+    let secret = trim_trailing_whitespace(&contents);
     #[cfg(debug_assertions)]
-    println!("using secret: {}", contents);
-    Ok(ClientSecret::new(contents))
+    println!("using secret: {}", secret);
+    Ok(ClientSecret::new(secret))
 }
 
 fn hashset_from<T: std::cmp::Eq + std::hash::Hash>(vals: Vec<T>) -> HashSet<T> {
