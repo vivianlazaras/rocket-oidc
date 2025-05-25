@@ -25,12 +25,14 @@ pub async fn keycloak(auth_state: &State<AuthState>) -> Redirect {
     Redirect::to(authorize_url.to_string())
 }
 
-#[get("/callback?<code>&<_state>")]
+#[get("/callback?<code>&<state>&<iss>&<session_state>")]
 pub async fn callback(
     jar: &CookieJar<'_>,
     auth_state: &State<AuthState>,
     code: String,
-    _state: String,
+    state: String,
+    session_state: String,
+    iss: String,
 ) -> Result<Redirect, crate::Error> {
     if let Some(_access_token) = jar.get("access_token") {
         // I should check to make sure the token hasn't expired
