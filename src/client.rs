@@ -192,7 +192,7 @@ impl OIDCClient {
         // This example will be running its own server at localhost:8080.
         // See below for the server implementation.
         .set_redirect_uri(
-            RedirectUrl::new(format!("http://{}/auth/callback/", config.redirect)).unwrap_or_else(
+            RedirectUrl::new(format!("{}/auth/callback/", config.redirect)).unwrap_or_else(
                 |_err| {
                     unreachable!();
                 },
