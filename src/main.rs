@@ -37,11 +37,11 @@ pub struct Args {
 
 fn main() {
     let args = Args::from_args();
-    let password = match args.password_file {
+    /*let password = match args.password_file {
         Some(password_file) => {
             read_password_from_file(&password_file).unwrap()
         },
         None => get_password("please enter admin password").unwrap(),
-    };
+    };*/
 
 }

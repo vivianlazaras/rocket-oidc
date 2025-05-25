@@ -2,6 +2,7 @@ use crate::{AddClaims, PronounClaim};
 use jsonwebtoken::*;
 use openidconnect::core::CoreGenderClaim;
 use openidconnect::core::*;
+use reqwest::Url;
 
 use crate::CoreClaims;
 use std::fmt::Debug;
@@ -44,6 +45,12 @@ pub type OpenIDClient<
     HasTokenUrl,
     HasUserInfoUrl,
 >;
+
+fn join_url(root: &str, route: &str) -> Result<String, url::ParseError> {
+    let base = Url::parse(root)?;
+    let joined = base.join(route)?;
+    Ok(joined.into())
+}
 
 async fn laod_client_secret<P: AsRef<Path>>(
     secret_file: P,
@@ -192,7 +199,7 @@ impl OIDCClient {
         // This example will be running its own server at localhost:8080.
         // See below for the server implementation.
         .set_redirect_uri(
-            RedirectUrl::new(format!("{}/auth/callback/", config.redirect)).unwrap_or_else(
+            RedirectUrl::new(join_url(&config.redirect, "/auth/callback/").unwrap()).unwrap_or_else(
                 |_err| {
                     unreachable!();
                 },
