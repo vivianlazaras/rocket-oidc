@@ -9,10 +9,10 @@ use std::fmt::Debug;
 
 use crate::OIDCConfig;
 
+use crate::token::*;
 use serde::de::DeserializeOwned;
 use std::collections::HashSet;
 use std::path::Path;
-use crate::token::*;
 use tokio::{fs::File, io::AsyncReadExt};
 
 use openidconnect::reqwest;
@@ -61,7 +61,7 @@ async fn laod_client_secret<P: AsRef<Path>>(
 ) -> Result<ClientSecret, std::io::Error> {
     let mut file = File::open(secret_file.as_ref()).await?;
     let mut contents = String::new();
-    
+
     file.read_to_string(&mut contents).await?;
     let secret = trim_trailing_whitespace(&contents);
     #[cfg(debug_assertions)]
@@ -206,11 +206,10 @@ impl OIDCClient {
         // This example will be running its own server at localhost:8080.
         // See below for the server implementation.
         .set_redirect_uri(
-            RedirectUrl::new(join_url(&config.redirect, "/auth/callback/").unwrap()).unwrap_or_else(
-                |_err| {
+            RedirectUrl::new(join_url(&config.redirect, "/auth/callback/").unwrap())
+                .unwrap_or_else(|_err| {
                     unreachable!();
-                },
-            ),
+                }),
         );
 
         Ok((
@@ -263,6 +262,7 @@ impl OIDCClient {
             self.config.client_secret.secret().as_str(),
             subject_token,
             audience,
-        ).await
+        )
+        .await
     }
 }

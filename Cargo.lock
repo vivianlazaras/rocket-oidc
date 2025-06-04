@@ -2032,6 +2032,7 @@ dependencies = [
 name = "rocket-oidc"
 version = "0.1.2"
 dependencies = [
+ "cookie",
  "err-derive",
  "jsonwebtoken",
  "openidconnect",
@@ -2042,6 +2043,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "structopt",
+ "time",
  "tokio",
 ]
 

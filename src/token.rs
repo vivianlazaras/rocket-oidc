@@ -48,11 +48,17 @@ pub(crate) async fn perform_token_exchange(
     audience: &str,
 ) -> Result<TokenExchangeResponse, reqwest::Error> {
     let client = Client::new();
-    
+
     let mut params = HashMap::new();
-    params.insert("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange");
+    params.insert(
+        "grant_type",
+        "urn:ietf:params:oauth:grant-type:token-exchange",
+    );
     params.insert("subject_token", subject_token);
-    params.insert("subject_token_type", "urn:ietf:params:oauth:token-type:access_token");
+    params.insert(
+        "subject_token_type",
+        "urn:ietf:params:oauth:token-type:access_token",
+    );
     params.insert("client_id", client_id);
     params.insert("client_secret", client_secret);
     // Optional, test with or without audience

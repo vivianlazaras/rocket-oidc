@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 #![allow(non_local_definitions)]
+#![allow(unused_variables)]
 /*!
 ```rust
 use serde_derive::{Serialize, Deserialize};
@@ -66,8 +67,8 @@ pub mod routes;
 pub mod token;
 
 use client::{OIDCClient, Validator};
-use rocket::http::Cookie;
 use rocket::http::ContentType;
+use rocket::http::Cookie;
 use rocket::response;
 use rocket::response::Responder;
 use rocket::{
@@ -79,7 +80,6 @@ use serde::de::DeserializeOwned;
 use std::env;
 use std::io::Cursor;
 use std::path::PathBuf;
-
 
 use openidconnect::AdditionalClaims;
 use openidconnect::reqwest;
@@ -230,7 +230,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
                     eprintln!("assuming token expired with error: {}", err);
                     let _ExpiredSignature = err;
                     {
-                        cookies.remove(Cookie::named("access_token"));
+                        cookies.remove(Cookie::build("access_token"));
                         Outcome::Forward(Status::Unauthorized)
                     }
                 }
@@ -333,7 +333,7 @@ impl OIDCConfig {
     pub fn post_login(&self) -> &str {
         match &self.post_login {
             Some(url) => &url,
-            None => "/"
+            None => "/",
         }
     }
     pub fn from_env() -> Result<Self, Error> {
@@ -360,7 +360,7 @@ impl OIDCConfig {
             client_secret,
             issuer_url,
             redirect,
-            post_login: None
+            post_login: None,
         })
     }
 }

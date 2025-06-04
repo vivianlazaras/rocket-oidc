@@ -1,8 +1,9 @@
-use structopt::StructOpt;
-use std::path::PathBuf;
+#[allow(unused_variables)]
 use rpassword::read_password;
 use std::io;
 use std::io::Write;
+use std::path::PathBuf;
+use structopt::StructOpt;
 
 fn get_password(prompt: &str) -> io::Result<String> {
     // Print the prompt without a newline and flush stdout
@@ -43,5 +44,4 @@ fn main() {
         },
         None => get_password("please enter admin password").unwrap(),
     };*/
-
 }
