@@ -66,15 +66,15 @@ pub async fn callback(
 
     // ── 3.  Calculate cookie expiry: "now" + expires_in seconds.
     let expires_at = OffsetDateTime::now_utc()
-        + Duration::seconds(token.expires_in().map_or(0, |v| v.as_secs()) as i64);
+        + Duration::seconds(token.expires_in().map_or(120, |v| v.as_secs()) as i64);
 
     // ── 4.  Store the access token in a cookie with an Expires attribute.
     jar.add(
         Cookie::build(("access_token", token.access_token().secret().to_string().to_owned()))
-            .secure(true)
+            .secure(false)
             .expires(expires_at)
             .http_only(true) // good practice
-            .same_site(SameSite::Strict) // or SameSite::Strict, if you prefer
+            .same_site(SameSite::Lax) // or SameSite::Strict, if you prefer
             ,
     );
 
