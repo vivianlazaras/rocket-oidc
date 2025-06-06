@@ -1,13 +1,13 @@
 use crate::AuthState;
+use crate::BaseClaims;
 use cookie::Expiration;
+use openidconnect::{AuthenticationFlow, CsrfToken, Nonce, Scope};
 use openidconnect::{AuthorizationCode, OAuth2TokenResponse, core::CoreResponseType};
 use rocket::http::SameSite;
 use rocket::http::{Cookie, CookieJar};
 /// This Module will contain routes for 3pid verification through OIDC
 use rocket::{Route, State, response::Redirect, routes};
-use time::{Duration, OffsetDateTime};
-
-use openidconnect::{AuthenticationFlow, CsrfToken, Nonce, Scope};
+use time::{OffsetDateTime};
 
 #[get("/keycloak")]
 pub async fn keycloak(auth_state: &State<AuthState>) -> Redirect {
@@ -64,18 +64,30 @@ pub async fn callback(
         .exchange_code(AuthorizationCode::new(code))
         .await?;
 
-    // ── 3.  Calculate cookie expiry: "now" + expires_in seconds.
-    let expires_at = OffsetDateTime::now_utc()
-        + Duration::seconds(token.expires_in().map_or(120, |v| v.as_secs()) as i64);
+    let expires_at: OffsetDateTime = match token.expires_in() {
+        Some(expires_in) => OffsetDateTime::now_utc() + expires_in,
+        None => {
+            let token_data = auth_state
+                .validator
+                .decode::<BaseClaims>(token.access_token().secret())
+                .unwrap();
+
+            // Convert Unix timestamp (exp) to OffsetDateTime
+            OffsetDateTime::from_unix_timestamp(token_data.claims.exp as i64)
+                .unwrap_or_else(|_| OffsetDateTime::now_utc())
+        }
+    };
 
     // ── 4.  Store the access token in a cookie with an Expires attribute.
     jar.add(
-        Cookie::build(("access_token", token.access_token().secret().to_string().to_owned()))
-            .secure(false)
-            .expires(expires_at)
-            .http_only(true) // good practice
-            .same_site(SameSite::Lax) // or SameSite::Strict, if you prefer
-            ,
+        Cookie::build((
+            "access_token",
+            token.access_token().secret().to_string().to_owned(),
+        ))
+        .secure(false)
+        .expires(expires_at)
+        .http_only(true) // good practice
+        .same_site(SameSite::Lax), // or SameSite::Strict, if you prefer
     );
 
     Ok(Redirect::to(auth_state.config.post_login().to_string()))

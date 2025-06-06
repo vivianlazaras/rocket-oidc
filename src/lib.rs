@@ -143,6 +143,19 @@ where
     // Include other claims you care about here
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BaseClaims {
+    exp: i64,
+    aud: String,
+    sub: String,
+}
+
+impl CoreClaims for BaseClaims {
+    fn subject(&self) -> &str {
+        &self.sub
+    }
+}
+
 pub trait CoreClaims {
     fn subject(&self) -> &str;
 }
