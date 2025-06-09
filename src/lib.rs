@@ -387,3 +387,7 @@ pub async fn setup(
         .manage(auth_state)
         .mount("/auth", routes::get_routes()))
 }
+
+pub fn register_validator(rocket: rocket::Rocket<Build>, validator: crate::client::Validator) -> Rocket<Build> {
+    rocket.manage(validator)
+}
