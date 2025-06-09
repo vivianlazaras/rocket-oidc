@@ -110,7 +110,18 @@ pub struct Validator {
 }
 
 impl Validator {
-    pub async fn from_pubkey(public_key: DecodingKey, validation: Validation) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn from_pubkey(url: &str, public_key: DecodingKey) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut validation = Validation::new(Algorithm::RS256);
+        //validation.insecure_disable_signature_validation();
+        {
+            validation.leeway = 100; // Optionally, allow some leeway
+            validation.validate_exp = true;
+            validation.validate_aud = true;
+            validation.validate_nbf = true;
+            validation.aud = Some(hashset_from(vec!["account".to_string()])); // The audience should match your client ID
+            validation.iss = Some(hashset_from(vec![url.to_string()])); // Validate the issuer
+            validation.algorithms = vec![Algorithm::RS256];
+        };
         Ok(Self {
             validation,
             public_key,
