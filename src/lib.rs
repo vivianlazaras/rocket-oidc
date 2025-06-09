@@ -65,7 +65,7 @@ use std::fmt::Debug;
 pub mod client;
 pub mod routes;
 pub mod token;
-
+pub mod auth;
 use client::{OIDCClient, Validator};
 use rocket::http::ContentType;
 use rocket::http::Cookie;

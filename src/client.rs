@@ -110,6 +110,12 @@ pub struct Validator {
 }
 
 impl Validator {
+    pub async fn from_pubkey(public_key: DecodingKey, validation: Validation) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self {
+            validation,
+            public_key,
+        })
+    }
     pub async fn new(
         validation: Validation,
         provider_metadata: &CoreProviderMetadata,
@@ -265,4 +271,6 @@ impl OIDCClient {
         )
         .await
     }
+
+    
 }
