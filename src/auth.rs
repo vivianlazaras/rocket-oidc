@@ -9,7 +9,8 @@ use rocket::Request;
 use crate::CoreClaims;
 use std::fmt::Debug;
 
-pub struct AuthGuard<T: Serialize + DeserializeOwned> {
+#[derive(Debug, Clone)]
+pub struct AuthGuard<T: Serialize + DeserializeOwned + Debug> {
     pub claims: T,
 }
 
