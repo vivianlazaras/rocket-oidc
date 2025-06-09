@@ -23,7 +23,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
 
     async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
         let cookies = req.cookies();
-        let validator = req.rocket().state::<crate::Validator>().unwrap().clone();
+        let validator = req.rocket().state::<crate::client::Validator>().unwrap().clone();
 
         if let Some(access_token) = cookies.get("access_token") {
             let token_data = validator.decode::<T>(access_token.value());
