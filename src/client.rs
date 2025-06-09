@@ -110,7 +110,7 @@ pub struct Validator {
 }
 
 impl Validator {
-    pub async fn from_pubkey(url: String, public_key: DecodingKey) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_pubkey(url: String, public_key: DecodingKey) -> Result<Self, Box<dyn std::error::Error>> {
         let mut validation = Validation::new(Algorithm::RS256);
         //validation.insecure_disable_signature_validation();
         {
