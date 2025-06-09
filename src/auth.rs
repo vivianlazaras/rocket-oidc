@@ -9,9 +9,6 @@ use rocket::Request;
 use crate::CoreClaims;
 use std::fmt::Debug;
 
-
-use crate::AuthState;
-
 pub struct AuthGuard<T: Serialize + DeserializeOwned> {
     pub claims: T,
 }
@@ -25,10 +22,10 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
 
     async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
         let cookies = req.cookies();
-        let auth = req.rocket().state::<AuthState>().unwrap().clone();
+        let validator = req.rocket().state::<crate::Validator>().unwrap().clone();
 
         if let Some(access_token) = cookies.get("access_token") {
-            let token_data = auth.validator.decode::<T>(access_token.value());
+            let token_data = validator.decode::<T>(access_token.value());
 
             match token_data {
                 Ok(data) => {
