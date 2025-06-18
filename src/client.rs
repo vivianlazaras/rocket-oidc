@@ -3,11 +3,15 @@ use jsonwebtoken::*;
 use openidconnect::core::CoreGenderClaim;
 use openidconnect::core::*;
 use reqwest::Url;
+use serde_derive::*;
+use std::str::FromStr;
 
 use crate::CoreClaims;
-use std::fmt::Debug;
-
+use crate::Error;
 use crate::OIDCConfig;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::fmt::Debug;
 
 use crate::token::*;
 use serde::de::DeserializeOwned;
@@ -103,15 +107,133 @@ impl WorkingConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
+pub struct KeyID {
+    issuer: String,
+    alg: String,
+}
+
+impl KeyID {
+    pub fn new(issuer: &str, alg: &str) -> Self {
+        KeyID {
+            issuer: issuer.to_string(),
+            alg: alg.to_string(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Endpoint {
+    validation: Validation,
+    pubkey: DecodingKey,
+}
+
+impl Endpoint {
+    pub fn new(validation: Validation, pubkey: DecodingKey) -> Self {
+        Self { validation, pubkey }
+    }
+}
+
 #[derive(Clone)]
 pub struct Validator {
+    pubkeys: HashMap<KeyID, Endpoint>,
+    default_iss: String,
+}
+
+fn parse_jwks(
+    issuer: &str,
+    jwks_json: &str,
     validation: Validation,
-    public_key: DecodingKey,
+) -> Result<HashMap<KeyID, Endpoint>, Box<dyn std::error::Error>> {
+    let jwks: Value = serde_json::from_str(jwks_json)?;
+    let keys_array = jwks["keys"]
+        .as_array()
+        .ok_or("JWKS does not contain a 'keys' array")?;
+
+    let mut keys = HashMap::new();
+
+    for jwk in keys_array {
+        let alg = jwk["alg"].as_str().ok_or("Missing 'alg' in JWK")?;
+        let kid = jwk["kid"].as_str().unwrap_or("default");
+
+        let decoding_key = match alg {
+            "RS256" | "RS384" | "RS512" => {
+                let n = jwk["n"].as_str().ok_or("Missing 'n' in RSA JWK")?;
+                let e = jwk["e"].as_str().ok_or("Missing 'e' in RSA JWK")?;
+                DecodingKey::from_rsa_components(n, e)?
+            }
+
+            "ES256" | "ES384" | "ES512" => {
+                let x = jwk["x"].as_str().ok_or("Missing 'x' in EC JWK")?;
+                let y = jwk["y"].as_str().ok_or("Missing 'y' in EC JWK")?;
+                DecodingKey::from_ec_components(x, y)?
+            }
+
+            "HS256" | "HS384" | "HS512" => {
+                let k = jwk["k"].as_str().ok_or("Missing 'k' in symmetric JWK")?;
+                DecodingKey::from_base64_secret(k)?
+            }
+
+            other => {
+                eprintln!("Unsupported algorithm: {}", other);
+                continue; // skip this key
+            }
+        };
+
+        let key_id = KeyID::new(issuer, alg);
+        keys.insert(key_id, Endpoint::new(validation.clone(), decoding_key));
+    }
+
+    Ok(keys)
 }
 
 impl Validator {
-    pub fn from_pubkey(url: String, audiance: String, public_key: DecodingKey) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut validation = Validation::new(Algorithm::RS256);
+    pub fn from_pubkey(
+        url: String,
+        audiance: String,
+        algorithm: String,
+        public_key: DecodingKey,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let pubkeys = HashMap::new();
+        let mut validator = Self {
+            pubkeys,
+            default_iss: url.clone(),
+        };
+
+        validator.insert_pubkey(url, audiance, algorithm, public_key)?;
+        Ok(
+            validator
+        )
+    }
+
+    pub async fn new(
+        validation: Validation,
+        provider_metadata: &CoreProviderMetadata,
+        issuer_url: String,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let jwks_uri = provider_metadata.jwks_uri().to_string();
+
+        let jwks_json = reqwest::get(jwks_uri).await?.text().await?;
+        let keys = parse_jwks(&issuer_url, &jwks_json, validation)?;
+        Ok(Self {
+            pubkeys: keys,
+            default_iss: issuer_url,
+        })
+    }
+
+    pub fn insert_endpoint(&mut self, keyid: KeyID, endpoint: Endpoint) {
+        self.pubkeys.insert(keyid, endpoint);
+    }
+
+    pub fn insert_pubkey(
+        &mut self,
+        url: String,
+        audiance: String,
+        algorithm: String,
+        public_key: DecodingKey,
+    ) -> Result<(), crate::Error> {
+        let algo = Algorithm::from_str(&algorithm)?;
+        let mut validation = Validation::new(algo);
         //validation.insecure_disable_signature_validation();
         {
             validation.leeway = 100; // Optionally, allow some leeway
@@ -119,53 +241,43 @@ impl Validator {
             validation.validate_aud = true;
             validation.validate_nbf = true;
             validation.aud = Some(hashset_from(vec![audiance])); // The audience should match your client ID
-            validation.iss = Some(hashset_from(vec![url])); // Validate the issuer
-            validation.algorithms = vec![Algorithm::RS256];
+            validation.iss = Some(hashset_from(vec![url.clone()])); // Validate the issuer
+            validation.algorithms = vec![algo];
         };
-        Ok(Self {
-            validation,
-            public_key,
-        })
-    }
-    pub async fn new(
-        validation: Validation,
-        provider_metadata: &CoreProviderMetadata,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let jwks_uri = provider_metadata.jwks_uri().to_string();
 
-        // Fetch JSON Web Key Set (JWKS) from the provider
-        let jwks: serde_json::Value =
-            serde_json::from_str(&reqwest::get(jwks_uri).await.unwrap().text().await.unwrap())
-                .unwrap();
-
-        // Assuming you have the correct key in JWKS for verification
-        //let jwk = &jwks["keys"][0]; // Adjust based on the actual structure of the JWKS
-        let mut jwtkeys = jwks["keys"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|v| v["alg"] == "RS256")
-            .collect::<Vec<&serde_json::Value>>();
-        println!("keys: {:?}", jwtkeys);
-        let jwk = jwtkeys.pop().unwrap();
-        // Public key from the JWKS
-        let public_key = DecodingKey::from_rsa_components(
-            jwk["n"].as_str().unwrap(),
-            jwk["e"].as_str().unwrap(),
-        )
-        .unwrap();
-
-        Ok(Self {
-            validation,
-            public_key,
-        })
+        let keyid = KeyID::new(&url, &algorithm);
+        self.pubkeys.insert(keyid, Endpoint::new(validation, public_key));
+        Ok(())
     }
 
+    pub fn decode_with_iss_alg<
+        T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims,
+    >(
+        &self,
+        issuer: &str,
+        algorithm: &str,
+        access_token: &str,
+    ) -> Result<TokenData<T>, crate::Error> {
+        let keyid = KeyID::new(issuer, algorithm);
+        if let Some(endpoint) = self.pubkeys.get(&keyid) {
+            Ok(decode::<T>(
+                access_token,
+                &endpoint.pubkey,
+                &endpoint.validation,
+            )?)
+        } else {
+            Err(Error::PubKeyNotFound(keyid))
+        }
+    }
+
+    /// this function is deprecated because it uses the default issuer rule
+    /// which may not be the right url to lookup a key by if using multiple provider endpoints.
+    #[deprecated]
     pub fn decode<T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims>(
         &self,
         access_token: &str,
-    ) -> Result<TokenData<T>, jsonwebtoken::errors::Error> {
-        decode::<T>(access_token, &self.public_key, &self.validation)
+    ) -> Result<TokenData<T>, crate::Error> {
+        self.decode_with_iss_alg::<T>(&self.default_iss, "RS256", access_token)
     }
 }
 
@@ -212,7 +324,12 @@ impl OIDCClient {
             validation.algorithms = vec![Algorithm::RS256];
         };
 
-        let validator = Validator::new(validation, &provider_metadata).await?;
+        let validator = Validator::new(
+            validation,
+            &provider_metadata,
+            config.issuer_url.to_string(),
+        )
+        .await?;
 
         // Set up the config for the GitLab OAuth2 process.
         let client = CoreClient::from_provider_metadata(
@@ -282,6 +399,4 @@ impl OIDCClient {
         )
         .await
     }
-
-    
 }

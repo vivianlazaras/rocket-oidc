@@ -62,10 +62,11 @@ extern crate rocket;
 extern crate err_derive;
 
 use std::fmt::Debug;
+pub mod auth;
 pub mod client;
 pub mod routes;
 pub mod token;
-pub mod auth;
+use crate::client::KeyID;
 use client::{OIDCClient, Validator};
 use rocket::http::ContentType;
 use rocket::http::Cookie;
@@ -121,7 +122,7 @@ impl UserInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, Error)]
+#[derive(Debug, Clone, Error)]
 #[error(display = "failed to parse user info: ", _0)]
 pub enum UserInfoErr {
     #[error(display = "missing given name")]
@@ -298,6 +299,10 @@ pub enum Error {
     ConfigurationError(#[error(source)] ConfigurationError),
     #[error(display = "token validation error: {}", _0)]
     TokenError(#[error(source)] TokenErr),
+    #[error(display = "pubkey not found when trying to decode access token")]
+    PubKeyNotFound(KeyID),
+    #[error(display = "failed to parse json web key: {}", _0)]
+    JsonWebToken(#[source] jsonwebtoken::errors::Error),
 }
 
 impl<'r> Responder<'r, 'static> for Error {
@@ -309,6 +314,7 @@ impl<'r> Responder<'r, 'static> for Error {
             }
             Error::Reqwest(_) | Error::ConfigurationError(_) => Status::InternalServerError,
             Error::TokenError(_) => Status::Unauthorized,
+            Error::PubKeyNotFound(_) | Error::JsonWebToken(_) => Status::Unauthorized,
         };
 
         response::Response::build()
@@ -388,6 +394,9 @@ pub async fn setup(
         .mount("/auth", routes::get_routes()))
 }
 
-pub fn register_validator(rocket: rocket::Rocket<Build>, validator: crate::client::Validator) -> Rocket<Build> {
+pub fn register_validator(
+    rocket: rocket::Rocket<Build>,
+    validator: crate::client::Validator,
+) -> Rocket<Build> {
     rocket.manage(validator)
 }

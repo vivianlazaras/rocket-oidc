@@ -7,7 +7,7 @@ use rocket::http::SameSite;
 use rocket::http::{Cookie, CookieJar};
 /// This Module will contain routes for 3pid verification through OIDC
 use rocket::{Route, State, response::Redirect, routes};
-use time::{OffsetDateTime};
+use time::OffsetDateTime;
 
 #[get("/keycloak")]
 pub async fn keycloak(auth_state: &State<AuthState>) -> Redirect {

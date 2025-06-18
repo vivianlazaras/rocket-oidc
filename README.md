@@ -91,6 +91,7 @@ export REDIRECT_URI="http://callback_url.com/"
 2. Refactor to add client module, and make code more modular.
 3. Added support for token exchange.
 4. Fixed token expiration issue.
+5. Refactor to allow for multiple identity providers.
 
 ## Security
 This crate is not audited, and is very much as work in progress, as such its security cannot be garunteed.
