@@ -41,7 +41,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
             match token_data {
                 Ok(data) => Outcome::Success(AuthGuard {
                     claims: data.claims,
-                    access_token: access_token.to_string(),
+                    access_token: access_token.value().to_string(),
                 }),
                 Err(err) => {
                     eprintln!("assuming token expired with error: {}", err);
