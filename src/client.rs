@@ -302,6 +302,23 @@ impl Validator {
         })
     }
 
+    fn default_validation(url: &str, audiance: &str, algorithm: &str) -> Result<Validation, Box<dyn std::error::Error>> {
+        let algo = Algorithm::from_str(&algorithm)?;
+        let mut validation = Validation::new(algo);
+        //validation.insecure_disable_signature_validation();
+        {
+            validation.leeway = 100; // Optionally, allow some leeway
+            validation.validate_exp = true;
+            validation.validate_aud = true;
+            validation.validate_nbf = true;
+            validation.aud = Some(hashset_from(vec![audiance.to_string()])); // The audience should match your client ID
+            validation.iss = Some(hashset_from(vec![url.to_string()])); // Validate the issuer
+            validation.algorithms = vec![algo];
+        };
+
+        Ok(validation)
+    }
+
     /// Extends the validator by dynamically discovering and importing public keys (JWKS)
     /// from the OpenID Connect (OIDC) discovery endpoint of the given issuer.
     ///
@@ -334,7 +351,7 @@ impl Validator {
     /// let mut validator = Validator::new(...);
     /// validator.extend_from_oidc("https://accounts.example.com").await?;
     /// ```
-    pub async fn extend_from_oidc(&mut self, issuer_url: &str, validation: Validation) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn extend_from_oidc(&mut self, issuer_url: &str, audiance: &str, default_algorithm: &str) -> Result<(), Box<dyn std::error::Error>> {
         let http_client = match reqwest::ClientBuilder::new()
             // Following redirects opens the client up to SSRF vulnerabilities.
             .redirect(reqwest::redirect::Policy::none())
@@ -351,6 +368,8 @@ impl Validator {
                 Ok(provider_metadata) => provider_metadata,
                 Err(e) => return Err(Box::new(e)),
             };
+        let validation = Self::default_validation(issuer_url, audiance, default_algorithm)?;
+
         let jwks_uri = provider_metadata.jwks_uri().to_string();
         let jwks_json = reqwest::get(jwks_uri).await?.text().await?;
         let keys = parse_jwks(&issuer_url, &jwks_json, validation.clone())?;
@@ -408,19 +427,9 @@ impl Validator {
         audiance: String,
         algorithm: String,
         public_key: DecodingKey,
-    ) -> Result<(), crate::Error> {
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let algo = Algorithm::from_str(&algorithm)?;
-        let mut validation = Validation::new(algo);
-        //validation.insecure_disable_signature_validation();
-        {
-            validation.leeway = 100; // Optionally, allow some leeway
-            validation.validate_exp = true;
-            validation.validate_aud = true;
-            validation.validate_nbf = true;
-            validation.aud = Some(hashset_from(vec![audiance])); // The audience should match your client ID
-            validation.iss = Some(hashset_from(vec![url.clone()])); // Validate the issuer
-            validation.algorithms = vec![algo];
-        };
+        let validation = Self::default_validation(&url, &audiance, &algorithm)?;
 
         let keyid = KeyID::new(&url, &algorithm);
         self.pubkeys
