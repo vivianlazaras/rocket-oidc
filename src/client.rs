@@ -181,13 +181,12 @@ pub struct Validator {
     // Default issuer URL, used by legacy or simplified decoding methods.
     // Note: this may not always be correct if your validator handles multiple issuers.
     default_iss: String,
-    validation: Validation,
 }
 
 fn parse_jwks(
     issuer: &str,
     jwks_json: &str,
-    validation: Validation,
+    mut validation: Validation,
 ) -> Result<HashMap<KeyID, Endpoint>, Box<dyn std::error::Error>> {
     let jwks: Value = serde_json::from_str(jwks_json)?;
     let keys_array = jwks["keys"]
@@ -225,6 +224,7 @@ fn parse_jwks(
         };
 
         let key_id = KeyID::new(issuer, alg);
+        validation.algorithms = vec![Algorithm::from_str(alg)?];
         keys.insert(key_id, Endpoint::new(validation.clone(), decoding_key));
     }
 
@@ -251,19 +251,9 @@ impl Validator {
         let algo = Algorithm::from_str(&algorithm)?;
         let mut validation = Validation::new(algo);
         //validation.insecure_disable_signature_validation();
-        {
-            validation.leeway = 100; // Optionally, allow some leeway
-            validation.validate_exp = true;
-            validation.validate_aud = true;
-            validation.validate_nbf = true;
-            validation.aud = Some(hashset_from(vec![audiance.clone()])); // The audience should match your client ID
-            validation.iss = Some(hashset_from(vec![url.clone()])); // Validate the issuer
-            validation.algorithms = vec![algo];
-        };
         let mut validator = Self {
             pubkeys,
             default_iss: url.clone(),
-            validation,
         };
 
         validator.insert_pubkey(url, audiance, algorithm, public_key)?;
@@ -309,7 +299,6 @@ impl Validator {
         Ok(Self {
             pubkeys: keys,
             default_iss: issuer_url,
-            validation,
         })
     }
 
@@ -325,7 +314,7 @@ impl Validator {
     ///
     /// # Parameters
     /// - `issuer_url`: The base URL of the OIDC issuer (e.g., `https://accounts.example.com`).
-    ///
+    /// - `validation`: The validation params used for this endpoint (make sure iss, aud, alg are set correctly)
     /// # Returns
     /// - `Ok(())` if the keys were successfully fetched and added.
     /// - `Err(Box<dyn std::error::Error>)` if any network, parsing, or validation step fails.
@@ -345,7 +334,7 @@ impl Validator {
     /// let mut validator = Validator::new(...);
     /// validator.extend_from_oidc("https://accounts.example.com").await?;
     /// ```
-    pub async fn extend_from_oidc(&mut self, issuer_url: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn extend_from_oidc(&mut self, issuer_url: &str, validation: Validation) -> Result<(), Box<dyn std::error::Error>> {
         let http_client = match reqwest::ClientBuilder::new()
             // Following redirects opens the client up to SSRF vulnerabilities.
             .redirect(reqwest::redirect::Policy::none())
@@ -364,7 +353,7 @@ impl Validator {
             };
         let jwks_uri = provider_metadata.jwks_uri().to_string();
         let jwks_json = reqwest::get(jwks_uri).await?.text().await?;
-        let keys = parse_jwks(&issuer_url, &jwks_json, self.validation.clone())?;
+        let keys = parse_jwks(&issuer_url, &jwks_json, validation.clone())?;
         for (key, value) in keys.into_iter() {
             self.pubkeys.insert(key, value);
         }
@@ -388,9 +377,9 @@ impl Validator {
     /// let jwks_json = std::fs::read_to_string("keys.json")?;
     /// validator.extend_from_jwks("https://accounts.example.com", &jwks_json)?;
     /// ```
-    pub fn extend_from_jwks(&mut self, issuer_url: &str, jwks_json: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn extend_from_jwks(&mut self, issuer_url: &str, jwks_json: &str, validation: Validation) -> Result<(), Box<dyn std::error::Error>> {
         // Parse the keys, associating them with the issuer and current validation config
-        let keys = parse_jwks(issuer_url, jwks_json, self.validation.clone())?;
+        let keys = parse_jwks(issuer_url, jwks_json, validation.clone())?;
 
         // Insert them into the validator's pubkeys map
         for (key_id, endpoint) in keys {
@@ -557,7 +546,6 @@ impl OIDCClient {
             validation.validate_nbf = true;
             validation.aud = Some(hashset_from(vec!["account".to_string()])); // The audience should match your client ID
             validation.iss = Some(hashset_from(vec![config.issuer_url.to_string()])); // Validate the issuer
-            validation.algorithms = vec![Algorithm::RS256];
         };
 
         let validator = Validator::new(
