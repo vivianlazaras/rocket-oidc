@@ -181,6 +181,7 @@ pub struct Validator {
     // Default issuer URL, used by legacy or simplified decoding methods.
     // Note: this may not always be correct if your validator handles multiple issuers.
     default_iss: String,
+    validation: Validation,
 }
 
 fn parse_jwks(
@@ -247,9 +248,22 @@ impl Validator {
         public_key: DecodingKey,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let pubkeys = HashMap::new();
+        let algo = Algorithm::from_str(&algorithm)?;
+        let mut validation = Validation::new(algo);
+        //validation.insecure_disable_signature_validation();
+        {
+            validation.leeway = 100; // Optionally, allow some leeway
+            validation.validate_exp = true;
+            validation.validate_aud = true;
+            validation.validate_nbf = true;
+            validation.aud = Some(hashset_from(vec![audiance.clone()])); // The audience should match your client ID
+            validation.iss = Some(hashset_from(vec![url.clone()])); // Validate the issuer
+            validation.algorithms = vec![algo];
+        };
         let mut validator = Self {
             pubkeys,
             default_iss: url.clone(),
+            validation,
         };
 
         validator.insert_pubkey(url, audiance, algorithm, public_key)?;
@@ -291,11 +305,99 @@ impl Validator {
         let jwks_uri = provider_metadata.jwks_uri().to_string();
 
         let jwks_json = reqwest::get(jwks_uri).await?.text().await?;
-        let keys = parse_jwks(&issuer_url, &jwks_json, validation)?;
+        let keys = parse_jwks(&issuer_url, &jwks_json, validation.clone())?;
         Ok(Self {
             pubkeys: keys,
             default_iss: issuer_url,
+            validation,
         })
+    }
+
+    /// Extends the validator by dynamically discovering and importing public keys (JWKS)
+    /// from the OpenID Connect (OIDC) discovery endpoint of the given issuer.
+    ///
+    /// This method performs the following steps:
+    /// 1. Initializes an HTTP client with redirect-following disabled for security reasons.
+    /// 2. Fetches the OpenID Connect provider metadata from the issuer's well-known discovery endpoint.
+    /// 3. Retrieves the JWKS (JSON Web Key Set) URI from the provider metadata.
+    /// 4. Downloads the JWKS document and parses the keys.
+    /// 5. Inserts the discovered keys into the validator's `pubkeys` map, associating them with the issuer.
+    ///
+    /// # Parameters
+    /// - `issuer_url`: The base URL of the OIDC issuer (e.g., `https://accounts.example.com`).
+    ///
+    /// # Returns
+    /// - `Ok(())` if the keys were successfully fetched and added.
+    /// - `Err(Box<dyn std::error::Error>)` if any network, parsing, or validation step fails.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - The HTTP client could not be created.
+    /// - The issuer URL is invalid.
+    /// - The provider metadata discovery fails.
+    /// - The JWKS document cannot be fetched or parsed.
+    ///
+    /// # Security
+    /// - Redirects are explicitly disabled to prevent SSRF attacks when contacting the discovery endpoint.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let mut validator = Validator::new(...);
+    /// validator.extend_from_oidc("https://accounts.example.com").await?;
+    /// ```
+    pub async fn extend_from_oidc(&mut self, issuer_url: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let http_client = match reqwest::ClientBuilder::new()
+            // Following redirects opens the client up to SSRF vulnerabilities.
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+        {
+            Ok(client) => client,
+            Err(e) => return Err(Box::new(e)),
+        };
+
+        let provider_metadata =
+            match CoreProviderMetadata::discover_async(IssuerUrl::new(issuer_url.to_string())?, &http_client)
+                .await
+            {
+                Ok(provider_metadata) => provider_metadata,
+                Err(e) => return Err(Box::new(e)),
+            };
+        let jwks_uri = provider_metadata.jwks_uri().to_string();
+        let jwks_json = reqwest::get(jwks_uri).await?.text().await?;
+        let keys = parse_jwks(&issuer_url, &jwks_json, self.validation.clone())?;
+        for (key, value) in keys.into_iter() {
+            self.pubkeys.insert(key, value);
+        }
+        Ok(())
+    }
+
+    /// Extends the validator by parsing and adding public keys from a JWKS JSON document
+    /// associated with the given issuer.
+    ///
+    /// # Parameters
+    /// - `issuer_url`: The base URL of the OIDC issuer (e.g., `https://accounts.example.com`).
+    /// - `jwks_json`: The raw JWKS JSON string.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the keys were successfully parsed and added.
+    /// - `Err(crate::Error)` if parsing fails.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let mut validator = Validator::new(...);
+    /// let jwks_json = std::fs::read_to_string("keys.json")?;
+    /// validator.extend_from_jwks("https://accounts.example.com", &jwks_json)?;
+    /// ```
+    pub fn extend_from_jwks(&mut self, issuer_url: &str, jwks_json: &str) -> Result<(), Box<dyn std::error::Error>> {
+        // Parse the keys, associating them with the issuer and current validation config
+        let keys = parse_jwks(issuer_url, jwks_json, self.validation.clone())?;
+
+        // Insert them into the validator's pubkeys map
+        for (key_id, endpoint) in keys {
+            self.pubkeys.insert(key_id, endpoint);
+        }
+
+        Ok(())
     }
 
     /// Inserts a new validation endpoint directly by its `KeyID`.
