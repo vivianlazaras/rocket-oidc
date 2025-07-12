@@ -24,6 +24,7 @@ pub async fn keycloak(auth_state: &State<AuthState>) -> Redirect {
         // This example is requesting access to the the user's profile including email.
         .add_scope(Scope::new("email".to_string()))
         .add_scope(Scope::new("profile".to_string()))
+        .add_scope(Scope::new(auth_state.config.client_id.clone()))
         .url();
     Redirect::to(authorize_url.to_string())
 }
