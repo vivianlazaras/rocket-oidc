@@ -87,7 +87,7 @@ pub mod auth;
 pub mod client;
 pub mod routes;
 pub mod token;
-use crate::client::{KeyID, IssuerData};
+use crate::client::{IssuerData, KeyID};
 use client::{OIDCClient, Validator};
 use rocket::http::ContentType;
 use rocket::http::Cookie;
@@ -239,13 +239,11 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
             let token_result = if let Some(issuer_cookie) = cookies.get("issuer_data") {
                 // Parse issuer_data JSON
                 match serde_json::from_str::<IssuerData>(issuer_cookie.value()) {
-                    Ok(issuer_data) => {
-                        auth.validator.decode_with_iss_alg::<T>(
-                            &issuer_data.issuer,
-                            &issuer_data.algorithm,
-                            access_token.value(),
-                        )
-                    }
+                    Ok(issuer_data) => auth.validator.decode_with_iss_alg::<T>(
+                        &issuer_data.issuer,
+                        &issuer_data.algorithm,
+                        access_token.value(),
+                    ),
                     Err(err) => {
                         eprintln!("Failed to parse issuer_data cookie: {:?}", err);
                         cookies.remove(Cookie::build("access_token"));
@@ -351,8 +349,7 @@ impl<'r> Responder<'r, 'static> for Error {
                 Status::BadRequest
             }
             Error::Reqwest(_) | Error::ConfigurationError(_) => Status::InternalServerError,
-            Error::TokenError(_) | Error::MissingAlgoForIssuer(_)
-             => Status::Unauthorized,
+            Error::TokenError(_) | Error::MissingAlgoForIssuer(_) => Status::Unauthorized,
             Error::PubKeyNotFound(_) | Error::JsonWebToken(_) => Status::Unauthorized,
         };
 

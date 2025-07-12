@@ -263,7 +263,8 @@ impl Validator {
     /// Returns a sorted list of unique algorithms supported for the given issuer,
     /// based on the pubkeys map.
     pub fn get_supported_algorithms_for_issuer(&self, issuer: &str) -> Option<Vec<String>> {
-        let mut algs: Vec<String> = self.pubkeys
+        let mut algs: Vec<String> = self
+            .pubkeys
             .keys()
             .filter(|key_id| key_id.issuer == issuer)
             .map(|key_id| key_id.alg.clone())
@@ -273,11 +274,7 @@ impl Validator {
         algs.sort();
         algs.dedup();
 
-        if algs.is_empty() {
-            None
-        } else {
-            Some(algs)
-        }
+        if algs.is_empty() { None } else { Some(algs) }
     }
 
     /// Loads public keys dynamically from a JWKS endpoint discovered from provider metadata.
@@ -302,7 +299,11 @@ impl Validator {
         })
     }
 
-    fn default_validation(url: &str, audiance: &str, algorithm: &str) -> Result<Validation, Box<dyn std::error::Error>> {
+    fn default_validation(
+        url: &str,
+        audiance: &str,
+        algorithm: &str,
+    ) -> Result<Validation, Box<dyn std::error::Error>> {
         let algo = Algorithm::from_str(&algorithm)?;
         let mut validation = Validation::new(algo);
         //validation.insecure_disable_signature_validation();
@@ -351,7 +352,12 @@ impl Validator {
     /// let mut validator = Validator::new(...);
     /// validator.extend_from_oidc("https://accounts.example.com").await?;
     /// ```
-    pub async fn extend_from_oidc(&mut self, issuer_url: &str, audiance: &str, default_algorithm: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn extend_from_oidc(
+        &mut self,
+        issuer_url: &str,
+        audiance: &str,
+        default_algorithm: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let http_client = match reqwest::ClientBuilder::new()
             // Following redirects opens the client up to SSRF vulnerabilities.
             .redirect(reqwest::redirect::Policy::none())
@@ -361,13 +367,15 @@ impl Validator {
             Err(e) => return Err(Box::new(e)),
         };
 
-        let provider_metadata =
-            match CoreProviderMetadata::discover_async(IssuerUrl::new(issuer_url.to_string())?, &http_client)
-                .await
-            {
-                Ok(provider_metadata) => provider_metadata,
-                Err(e) => return Err(Box::new(e)),
-            };
+        let provider_metadata = match CoreProviderMetadata::discover_async(
+            IssuerUrl::new(issuer_url.to_string())?,
+            &http_client,
+        )
+        .await
+        {
+            Ok(provider_metadata) => provider_metadata,
+            Err(e) => return Err(Box::new(e)),
+        };
         let validation = Self::default_validation(issuer_url, audiance, default_algorithm)?;
 
         let jwks_uri = provider_metadata.jwks_uri().to_string();
@@ -396,7 +404,12 @@ impl Validator {
     /// let jwks_json = std::fs::read_to_string("keys.json")?;
     /// validator.extend_from_jwks("https://accounts.example.com", &jwks_json)?;
     /// ```
-    pub fn extend_from_jwks(&mut self, issuer_url: &str, jwks_json: &str, validation: Validation) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn extend_from_jwks(
+        &mut self,
+        issuer_url: &str,
+        jwks_json: &str,
+        validation: Validation,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Parse the keys, associating them with the issuer and current validation config
         let keys = parse_jwks(issuer_url, jwks_json, validation.clone())?;
 
@@ -454,6 +467,22 @@ impl Validator {
     ) -> Result<TokenData<T>, crate::Error> {
         let keyid = KeyID::new(issuer, algorithm);
         if let Some(endpoint) = self.pubkeys.get(&keyid) {
+            #[cfg(debug_assertions)]
+            {
+                let emptyvalidation = Validation::new(Algorithm::from_str(algorithm)?);
+                match jsonwebtoken::decode::<serde_json::Value>(
+                    access_token,
+                    &endpoint.pubkey,
+                    &emptyvalidation,
+                ) {
+                    Ok(data) => {
+                        eprintln!("DEBUG: Unvalidated token claims: {:#?}", data.claims);
+                    }
+                    Err(e) => {
+                        eprintln!("DEBUG: Failed to decode unvalidated token: {:?}", e);
+                    }
+                }
+            }
             Ok(decode::<T>(
                 access_token,
                 &endpoint.pubkey,

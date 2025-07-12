@@ -10,7 +10,6 @@ use rocket::http::{Cookie, CookieJar};
 use rocket::{Route, State, response::Redirect, routes};
 use time::OffsetDateTime;
 
-
 #[get("/keycloak")]
 pub async fn keycloak(auth_state: &State<AuthState>) -> Redirect {
     let (authorize_url, _csrf_state, _nonce) = auth_state
@@ -24,7 +23,6 @@ pub async fn keycloak(auth_state: &State<AuthState>) -> Redirect {
         // This example is requesting access to the the user's profile including email.
         .add_scope(Scope::new("email".to_string()))
         .add_scope(Scope::new("profile".to_string()))
-        .add_scope(Scope::new(auth_state.config.client_id.clone()))
         .url();
     Redirect::to(authorize_url.to_string())
 }
@@ -81,7 +79,8 @@ pub async fn callback(
 
     // ── 3. Find matching algorithm from validator for this issuer
     let validator = &auth_state.validator;
-    let supported_algs = validator.get_supported_algorithms_for_issuer(&iss)
+    let supported_algs = validator
+        .get_supported_algorithms_for_issuer(&iss)
         .ok_or_else(|| {
             eprintln!("unknown issuer: {}", iss);
             crate::Error::MissingIssuerUrl
@@ -98,14 +97,11 @@ pub async fn callback(
 
     // ── 4. Store access_token
     jar.add(
-        Cookie::build((
-            "access_token",
-            token.access_token().secret().to_string(),
-        ))
-        .secure(false)
-        .expires(expires_at)
-        .http_only(true)
-        .same_site(SameSite::Lax),
+        Cookie::build(("access_token", token.access_token().secret().to_string()))
+            .secure(false)
+            .expires(expires_at)
+            .http_only(true)
+            .same_site(SameSite::Lax),
     );
 
     // ── 5. Store issuer_data JSON
@@ -125,7 +121,6 @@ pub async fn callback(
 
     Ok(Redirect::to(auth_state.config.post_login().to_string()))
 }
-
 
 pub fn get_routes() -> Vec<Route> {
     routes![keycloak, callback]

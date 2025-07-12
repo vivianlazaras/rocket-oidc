@@ -1,12 +1,12 @@
 //! This module provides `AuthGuard` which doesn't request user info, but simply validates server public key
 //! this is useful for implementing local only login systems that don't rely on full OIDC support from the authorization server
 
-use serde::{Serialize, de::DeserializeOwned};
-use crate::client::IssuerData;
 use crate::CoreClaims;
+use crate::client::IssuerData;
 use rocket::Request;
 use rocket::http::{Cookie, Status};
 use rocket::request::{FromRequest, Outcome};
+use serde::{Serialize, de::DeserializeOwned};
 use std::fmt::Debug;
 
 #[derive(Debug, Clone)]
