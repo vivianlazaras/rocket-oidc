@@ -469,7 +469,10 @@ impl Validator {
         if let Some(endpoint) = self.pubkeys.get(&keyid) {
             #[cfg(debug_assertions)]
             {
-                let emptyvalidation = Validation::new(Algorithm::from_str(algorithm)?);
+                let mut emptyvalidation = Validation::new(Algorithm::from_str(algorithm)?);
+                emptyvalidation.validate_aud = false;
+                emptyvalidation.validate_exp = false;
+                emptyvalidation.validate_nbf = false;
                 match jsonwebtoken::decode::<serde_json::Value>(
                     access_token,
                     &endpoint.pubkey,
