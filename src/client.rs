@@ -81,8 +81,11 @@ fn hashset_from<T: std::cmp::Eq + std::hash::Hash>(vals: Vec<T>) -> HashSet<T> {
     set
 }
 
+/// Configuration used internally by the OIDC client to manage static values.
+///
+/// Contains client credentials and metadata loaded from a higher-level `OIDCConfig`.
 #[derive(Debug, Clone, Serialize)]
-struct WorkingConfig {
+pub struct WorkingConfig {
     client_secret: ClientSecret,
     client_id: ClientId,
     issuer_url: IssuerUrl,
@@ -90,6 +93,16 @@ struct WorkingConfig {
 }
 
 impl WorkingConfig {
+    /// Constructs a new `WorkingConfig` from a high-level `OIDCConfig`.
+    ///
+    /// Loads the client secret asynchronously (e.g., from a file or secure vault).
+    ///
+    /// # Arguments
+    /// * `config` - The high-level configuration containing static strings and secret references.
+    ///
+    /// # Returns
+    /// * `Ok(WorkingConfig)` on success.
+    /// * `Err` if loading or parsing fails.
     pub async fn from_oidc_config(config: &OIDCConfig) -> Result<Self, Box<dyn std::error::Error>> {
         let client_id = config.client_id.clone();
         let issuer_url = config.issuer_url.clone();
@@ -107,6 +120,10 @@ impl WorkingConfig {
     }
 }
 
+/// Identifier for a public key used in token validation.
+///
+/// Combines the issuer and algorithm to uniquely reference a key in a multi-issuer or multi-algorithm environment.
+/// This is not that same as what's used within openidconnect crate, just used by this crates validator.
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
 pub struct KeyID {
     issuer: String,
@@ -114,6 +131,11 @@ pub struct KeyID {
 }
 
 impl KeyID {
+    /// Creates a new `KeyID` from issuer and algorithm strings.
+    ///
+    /// # Arguments
+    /// * `issuer` - The key issuer.
+    /// * `alg` - The signing algorithm.
     pub fn new(issuer: &str, alg: &str) -> Self {
         KeyID {
             issuer: issuer.to_string(),
@@ -122,6 +144,9 @@ impl KeyID {
     }
 }
 
+/// Represents a manually configured public key endpoint for token validation.
+///
+/// Contains validation rules and the decoding key used to verify signatures.
 #[derive(Clone)]
 pub struct Endpoint {
     validation: Validation,
@@ -129,14 +154,32 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
+    /// Creates a new `Endpoint` with the given validation rules and decoding key.
+    ///
+    /// # Arguments
+    /// * `validation` - Validation settings (audience, issuer, leeway, etc.).
+    /// * `pubkey` - The public key used to verify signatures.
     pub fn new(validation: Validation, pubkey: DecodingKey) -> Self {
         Self { validation, pubkey }
     }
 }
 
+/// A helper type for validating JSON Web Tokens (JWTs) against multiple issuers and algorithms.
+///
+/// `Validator` manages a collection of public keys and associated validation rules
+/// (wrapped in `Endpoint` structs) that can be used to decode and verify tokens.
+/// It supports loading keys dynamically from JWKS endpoints or inserting them manually.
+///
+/// Typically used when your application needs to accept tokens from multiple providers
+/// (e.g., multiple OpenID Connect issuers) or support multiple signing algorithms.
 #[derive(Clone)]
 pub struct Validator {
+    // A mapping from composite key identifiers (`KeyID`) — usually derived from issuer and algorithm —
+    // to the corresponding validation endpoint (`Endpoint`) containing the decoding key and validation rules.
     pubkeys: HashMap<KeyID, Endpoint>,
+
+    // Default issuer URL, used by legacy or simplified decoding methods.
+    // Note: this may not always be correct if your validator handles multiple issuers.
     default_iss: String,
 }
 
@@ -188,6 +231,15 @@ fn parse_jwks(
 }
 
 impl Validator {
+    /// Creates a new `Validator` from a single public key.
+    ///
+    /// This is useful when you already have a known key (for example, configured statically)
+    /// and want to build a validator around it.
+    ///
+    /// * `url` - Issuer URL.
+    /// * `audiance` - Expected audience claim (usually your client ID).
+    /// * `algorithm` - Signing algorithm (e.g., "RS256").
+    /// * `public_key` - Decoding key used to verify signatures.
     pub fn from_pubkey(
         url: String,
         audiance: String,
@@ -201,11 +253,36 @@ impl Validator {
         };
 
         validator.insert_pubkey(url, audiance, algorithm, public_key)?;
-        Ok(
-            validator
-        )
+        Ok(validator)
     }
 
+    /// Returns a sorted list of unique algorithms supported for the given issuer,
+    /// based on the pubkeys map.
+    pub fn get_supported_algorithms_for_issuer(&self, issuer: &str) -> Option<Vec<String>> {
+        let mut algs: Vec<String> = self.pubkeys
+            .keys()
+            .filter(|key_id| key_id.issuer == issuer)
+            .map(|key_id| key_id.alg.clone())
+            .collect();
+
+        // Remove duplicates & sort
+        algs.sort();
+        algs.dedup();
+
+        if algs.is_empty() {
+            None
+        } else {
+            Some(algs)
+        }
+    }
+
+    /// Loads public keys dynamically from a JWKS endpoint discovered from provider metadata.
+    ///
+    /// Fetches the JWKS, parses it, and builds validation rules for each key.
+    ///
+    /// * `validation` - Template validation rules to apply for each key.
+    /// * `provider_metadata` - OpenID Connect provider metadata (must include JWKS URI).
+    /// * `issuer_url` - The expected issuer URL.
     pub async fn new(
         validation: Validation,
         provider_metadata: &CoreProviderMetadata,
@@ -221,10 +298,19 @@ impl Validator {
         })
     }
 
+    /// Inserts a new validation endpoint directly by its `KeyID`.
+    ///
+    /// Useful when you already constructed an `Endpoint` yourself.
     pub fn insert_endpoint(&mut self, keyid: KeyID, endpoint: Endpoint) {
         self.pubkeys.insert(keyid, endpoint);
     }
 
+    /// Inserts a new public key and automatically builds its validation rules.
+    ///
+    /// * `url` - Issuer URL.
+    /// * `audiance` - Expected audience claim.
+    /// * `algorithm` - Signing algorithm.
+    /// * `public_key` - Decoding key.
     pub fn insert_pubkey(
         &mut self,
         url: String,
@@ -246,10 +332,18 @@ impl Validator {
         };
 
         let keyid = KeyID::new(&url, &algorithm);
-        self.pubkeys.insert(keyid, Endpoint::new(validation, public_key));
+        self.pubkeys
+            .insert(keyid, Endpoint::new(validation, public_key));
         Ok(())
     }
 
+    /// Decodes and validates an access token for a specific issuer and algorithm.
+    ///
+    /// * `issuer` - Issuer URL.
+    /// * `algorithm` - Signing algorithm (e.g., "RS256").
+    /// * `access_token` - The JWT string to decode.
+    ///
+    /// Returns the token's claims if valid, or an error otherwise.
     pub fn decode_with_iss_alg<
         T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims,
     >(
@@ -270,8 +364,9 @@ impl Validator {
         }
     }
 
-    /// this function is deprecated because it uses the default issuer rule
-    /// which may not be the right url to lookup a key by if using multiple provider endpoints.
+    /// Decodes and validates an access token using the default issuer and a default algorithm ("RS256").
+    ///
+    /// ⚠️ **Deprecated:** May not be correct if you handle multiple issuers or algorithms.
     #[deprecated]
     pub fn decode<T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims>(
         &self,
@@ -281,14 +376,53 @@ impl Validator {
     }
 }
 
+/// A high-level OpenID Connect (OIDC) client abstraction for performing common flows:
+/// - Discovering provider metadata
+/// - Exchanging authorization codes for tokens
+/// - Fetching user information
+/// - Performing token exchange
+///
+/// Internally, `OIDCClient` combines:
+/// - An OpenID Connect client (`OpenIDClient`)
+/// - A reqwest HTTP client (`reqwest::Client`)
+/// - Local configuration (`WorkingConfig`)
+///
+/// This design allows dynamic discovery from OIDC configuration,
+/// while keeping a ready-to-use validator for verifying ID tokens or access tokens.
 #[derive(Debug, Clone)]
 pub struct OIDCClient {
+    // The OpenID Connect client instance, created from discovered provider metadata.
     pub client: OpenIDClient,
+
+    // The reqwest HTTP client used for token and userinfo requests.
     reqwest_client: reqwest::Client,
+
+    // Local, working configuration values (e.g., client ID, secret, redirect URL, issuer).
     config: WorkingConfig,
 }
 
 impl OIDCClient {
+    /// Creates a new `OIDCClient` by dynamically discovering the provider metadata
+    /// and preparing a `Validator` to verify tokens.
+    ///
+    /// This method:
+    /// - Builds a safe reqwest HTTP client (with redirect following disabled).
+    /// - Discovers the OpenID provider metadata from the issuer URL.
+    /// - Constructs default validation rules (audience, issuer, leeway).
+    /// - Loads the JWKS keys into a `Validator`.
+    /// - Initializes the OpenID Connect client with the discovered metadata.
+    ///
+    /// # Arguments
+    /// * `config` - High-level OIDC configuration.
+    ///
+    /// # Returns
+    /// A tuple of:
+    /// - `OIDCClient` (for performing login and userinfo flows)
+    /// - `Validator` (for verifying ID tokens or access tokens)
+    ///
+    /// # Errors
+    /// Returns an error if discovery fails, the JWKS endpoint cannot be fetched,
+    /// or if the HTTP client cannot be built.
     pub async fn from_oidc_config(
         config: &OIDCConfig,
     ) -> Result<(Self, Validator), Box<dyn std::error::Error>> {
@@ -356,6 +490,17 @@ impl OIDCClient {
         ))
     }
 
+    /// Fetches user information from the provider's UserInfo endpoint.
+    ///
+    /// # Arguments
+    /// * `access_token` - The access token obtained after login.
+    /// * `subject` - Optionally, the subject (user ID) to query.
+    ///
+    /// # Returns
+    /// The claims returned by the UserInfo endpoint.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or the response is invalid.
     pub async fn user_info(
         &self,
         access_token: AccessToken,
@@ -374,6 +519,16 @@ impl OIDCClient {
             .await
     }
 
+    /// Exchanges an authorization code (received after user login) for a token response.
+    ///
+    /// # Arguments
+    /// * `code` - The authorization code.
+    ///
+    /// # Returns
+    /// The token response, including access token and optionally ID token or refresh token.
+    ///
+    /// # Errors
+    /// Returns an error if the token request fails or the response is invalid.
     pub async fn exchange_code(
         &self,
         code: AuthorizationCode,
@@ -385,6 +540,20 @@ impl OIDCClient {
             .await?)
     }
 
+    /// Performs OAuth2 token exchange to obtain a token scoped for a different audience.
+    ///
+    /// # Arguments
+    /// * `subject_token` - The current access token or ID token.
+    /// * `audience` - The target audience for the exchanged token.
+    ///
+    /// # Returns
+    /// The token exchange response, containing the new token.
+    ///
+    /// # Errors
+    /// Returns a reqwest error if the request fails.
+    ///
+    /// # Note
+    /// I haven't tested this in a full flow.
     pub async fn exchange_token_for_audience(
         &self,
         subject_token: &str,
@@ -399,4 +568,56 @@ impl OIDCClient {
         )
         .await
     }
+
+    /// Like `from_oidc_config`, but allows the caller to provide a custom `Validation` template.
+    ///
+    /// This can be used to:
+    /// - Disable signature verification for testing.
+    /// - Adjust expiration leeway, audience, issuer, etc.
+    /// - Support different algorithms.
+    pub async fn from_oidc_config_with_validation(
+        config: &OIDCConfig,
+        custom_validation: Validation,
+    ) -> Result<(Self, Validator), Box<dyn std::error::Error>> {
+        let config = WorkingConfig::from_oidc_config(config).await?;
+        let http_client = reqwest::ClientBuilder::new()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+
+        let provider_metadata =
+            CoreProviderMetadata::discover_async(config.issuer_url.clone(), &http_client).await?;
+
+        let validator = Validator::new(
+            custom_validation,
+            &provider_metadata,
+            config.issuer_url.to_string(),
+        )
+        .await?;
+
+        let client = CoreClient::from_provider_metadata(
+            provider_metadata,
+            config.client_id.clone(),
+            Some(config.client_secret.clone()),
+        )
+        .set_redirect_uri(
+            RedirectUrl::new(join_url(&config.redirect, "/auth/callback/").unwrap()).unwrap(),
+        );
+
+        Ok((
+            Self {
+                client,
+                config,
+                reqwest_client: http_client,
+            },
+            validator,
+        ))
+    }
+}
+
+/// this struct provides extra data stored in a cookie that's used to identify
+/// which issuer provided the json web token so it can be properly constructed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssuerData {
+    pub issuer: String,
+    pub algorithm: String,
 }

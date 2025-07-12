@@ -50,9 +50,30 @@ async fn rocket() -> _ {
         .mount("/", routes![index])
         .register("/", catchers![unauthorized]);
 
-    rocket_oidc::setup(rocket, OIDCConfig::from_env().unwrap())
+    rocket_oidc::setup(rocket, config.oidc().clone())
         .await
         .unwrap()
+}
+```
+## Auth Only
+you can use an AuthGuard<Claims> type which only validates the claims in the json web token and doesn't rely on a full OIDC implementation
+```
+#[launch]
+async fn rocket() -> _ {
+    let decoding_key = api.get_jwt_pubkey().await.unwrap();
+        let validator = rocket_oidc::client::Validator::from_pubkey(
+            config.api_endpoint().to_string(),
+            "storyteller".to_string(),
+            "RS256".to_string(),
+            decoding_key,
+        )
+        .unwrap();
+    let mut rocket = rocket::build()
+        .mount("/", routes![index])
+        .manage(validator)
+        .register("/", catchers![unauthorized]);
+
+    rocket
 }
 ```
 */
@@ -66,7 +87,7 @@ pub mod auth;
 pub mod client;
 pub mod routes;
 pub mod token;
-use crate::client::KeyID;
+use crate::client::{KeyID, IssuerData};
 use client::{OIDCClient, Validator};
 use rocket::http::ContentType;
 use rocket::http::Cookie;
@@ -86,8 +107,6 @@ use openidconnect::AdditionalClaims;
 use openidconnect::reqwest;
 use openidconnect::*;
 use serde::{Deserialize, Serialize};
-
-pub struct Config {}
 
 #[derive(Clone)]
 pub struct AuthState {
@@ -217,10 +236,30 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
         let auth = req.rocket().state::<AuthState>().unwrap().clone();
 
         if let Some(access_token) = cookies.get("access_token") {
-            let token_data = auth.validator.decode::<T>(access_token.value());
+            let token_result = if let Some(issuer_cookie) = cookies.get("issuer_data") {
+                // Parse issuer_data JSON
+                match serde_json::from_str::<IssuerData>(issuer_cookie.value()) {
+                    Ok(issuer_data) => {
+                        auth.validator.decode_with_iss_alg::<T>(
+                            &issuer_data.issuer,
+                            &issuer_data.algorithm,
+                            access_token.value(),
+                        )
+                    }
+                    Err(err) => {
+                        eprintln!("Failed to parse issuer_data cookie: {:?}", err);
+                        cookies.remove(Cookie::build("access_token"));
+                        return Outcome::Forward(Status::Unauthorized);
+                    }
+                }
+            } else {
+                // Fall back to default decode
+                auth.validator.decode::<T>(access_token.value())
+            };
 
-            match token_data {
+            match token_result {
                 Ok(data) => {
+                    // Try to fetch userinfo claims from userinfo endpoint
                     let userinfo_result: Result<UserInfoClaims<AddClaims, PronounClaim>, _> = auth
                         .client
                         .user_info(
@@ -241,16 +280,13 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
                     }
                 }
                 Err(err) => {
-                    eprintln!("assuming token expired with error: {}", err);
-                    let _ExpiredSignature = err;
-                    {
-                        cookies.remove(Cookie::build("access_token"));
-                        Outcome::Forward(Status::Unauthorized)
-                    }
+                    eprintln!("Token decode failed: {:?}", err);
+                    cookies.remove(Cookie::build("access_token"));
+                    Outcome::Forward(Status::Unauthorized)
                 }
             }
         } else {
-            eprintln!("no access token found");
+            eprintln!("No access token found");
             Outcome::Forward(Status::Unauthorized)
         }
     }
@@ -293,6 +329,8 @@ pub enum Error {
     MissingClientSecret,
     #[error(display = "missing issuer url")]
     MissingIssuerUrl,
+    #[error(display = "missing algorithim for issuer")]
+    MissingAlgoForIssuer(String),
     #[error(display = "failed to fetch: {}", _0)]
     Reqwest(#[error(source)] reqwest::Error),
     #[error(display = "openidconnect configuration error: {}", _0)]
@@ -313,7 +351,8 @@ impl<'r> Responder<'r, 'static> for Error {
                 Status::BadRequest
             }
             Error::Reqwest(_) | Error::ConfigurationError(_) => Status::InternalServerError,
-            Error::TokenError(_) => Status::Unauthorized,
+            Error::TokenError(_) | Error::MissingAlgoForIssuer(_)
+             => Status::Unauthorized,
             Error::PubKeyNotFound(_) | Error::JsonWebToken(_) => Status::Unauthorized,
         };
 
