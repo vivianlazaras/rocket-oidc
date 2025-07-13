@@ -107,7 +107,15 @@ use openidconnect::AdditionalClaims;
 use openidconnect::reqwest;
 use openidconnect::*;
 use serde::{Deserialize, Serialize};
+use rocket::http::SameSite;
+use rocket::http::CookieJar;
 
+/// Holds the authentication state used by the application.
+///
+/// Contains:
+/// - The OIDC token validator.
+/// - The OpenID Connect client for user info requests.
+/// - The static OIDC configuration.
 #[derive(Clone)]
 pub struct AuthState {
     pub validator: Validator,
@@ -115,12 +123,17 @@ pub struct AuthState {
     pub config: OIDCConfig,
 }
 
+/// Represents a localized claim value, such as a name or address
+/// that may have an associated language.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalizedClaim {
     language: Option<String>,
     value: String,
 }
 
+/// Basic user profile information returned from the userinfo endpoint.
+///
+/// This includes names, locale, picture URL, and optional fields like address or gender.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserInfo {
     address: Option<String>,
@@ -141,6 +154,7 @@ impl UserInfo {
     }
 }
 
+/// Errors that can occur when parsing or converting user info claims.
 #[derive(Debug, Clone, Error)]
 #[error(display = "failed to parse user info: ", _0)]
 pub enum UserInfoErr {
@@ -152,6 +166,10 @@ pub enum UserInfoErr {
     MissingPicture,
 }
 
+/// Guard type used in Rocket request handling that holds validated JWT claims
+/// and fetched user info.
+///
+/// Generic over claim type `T` which must implement `CoreClaims`.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(bound = "T: Serialize + DeserializeOwned")]
 pub struct OIDCGuard<T: CoreClaims>
@@ -163,10 +181,10 @@ where
     // Include other claims you care about here
 }
 
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BaseClaims {
     exp: i64,
-    aud: String,
     sub: String,
 }
 
@@ -176,6 +194,8 @@ impl CoreClaims for BaseClaims {
     }
 }
 
+/// Trait for extracting the subject identifier from any set of claims.
+/// this is also used as a marker trait
 pub trait CoreClaims {
     fn subject(&self) -> &str;
 }
@@ -290,7 +310,11 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
     }
 }
 
-pub async fn from_keycloak_oidc_config(
+/// Builds the authentication state by initializing the OIDC client
+/// and token validator from the given configuration.
+///
+/// Returns `AuthState` on success.
+pub async fn from_provider_oidc_config(
     config: OIDCConfig,
 ) -> Result<AuthState, Box<dyn std::error::Error>> {
     let (client, validator) = OIDCClient::from_oidc_config(&config).await?;
@@ -302,22 +326,15 @@ pub async fn from_keycloak_oidc_config(
     })
 }
 
-#[derive(Debug, Error, Responder)]
-#[error(display = "encountered error during route handling: {}", _0)]
-pub enum RouteError {
-    #[error(display = "reqwest error: {}", _0)]
-    #[response(status = 500)]
-    Reqwest(String),
-    #[error(display = "OIDC configuration error: {}", _0)]
-    #[response(status = 500)]
-    ConfigurationError(String),
-}
-
 pub type TokenErr = RequestTokenError<
     HttpClientError<reqwest::Error>,
     openidconnect::StandardErrorResponse<openidconnect::core::CoreErrorResponseType>,
 >;
 
+/// Top-level error type for the authentication layer.
+///
+/// Includes missing configuration, HTTP errors, token validation failures,
+/// and JSON parsing issues.
 #[derive(Debug, Error)]
 #[error(display = "failed to start rocket OIDC routes: {}", _0)]
 pub enum Error {
@@ -339,6 +356,8 @@ pub enum Error {
     PubKeyNotFound(KeyID),
     #[error(display = "failed to parse json web key: {}", _0)]
     JsonWebToken(#[source] jsonwebtoken::errors::Error),
+    #[error(display = "failed to parse or serialize json: {}", _0)]
+    JsonErr(serde_json::Error),
 }
 
 impl<'r> Responder<'r, 'static> for Error {
@@ -348,7 +367,7 @@ impl<'r> Responder<'r, 'static> for Error {
             Error::MissingClientId | Error::MissingClientSecret | Error::MissingIssuerUrl => {
                 Status::BadRequest
             }
-            Error::Reqwest(_) | Error::ConfigurationError(_) => Status::InternalServerError,
+            Error::Reqwest(_) | Error::ConfigurationError(_) | Error::JsonErr(_) => Status::InternalServerError,
             Error::TokenError(_) | Error::MissingAlgoForIssuer(_) => Status::Unauthorized,
             Error::PubKeyNotFound(_) | Error::JsonWebToken(_) => Status::Unauthorized,
         };
@@ -384,13 +403,31 @@ impl Default for OIDCConfig {
     }
 }
 
+/// Represents configuration parameters for OpenID Connect authentication.
+/// 
+/// Typically loaded from environment variables at runtime.
 impl OIDCConfig {
+    /// Returns the URL to redirect to after login has completed.
+    ///
+    /// If `post_login` is set, returns its value; otherwise defaults to `/`.
     pub fn post_login(&self) -> &str {
         match &self.post_login {
             Some(url) => &url,
             None => "/",
         }
     }
+
+    /// Constructs an `OIDCConfig` from environment variables.
+    ///
+    /// Required variables:
+    /// - `CLIENT_ID`: The OAuth2 client identifier.
+    /// - `CLIENT_SECRET`: The OAuth2 client secret.
+    /// - `ISSUER_URL`: The base URL of the OpenID Connect issuer.
+    ///
+    /// Optional variable:
+    /// - `REDIRECT_URL`: Redirect URI after login (defaults to `/profile` if unset).
+    ///
+    /// Returns an error if any required variable is missing.
     pub fn from_env() -> Result<Self, Error> {
         let client_id = match env::var("CLIENT_ID") {
             Ok(client_id) => client_id,
@@ -420,19 +457,65 @@ impl OIDCConfig {
     }
 }
 
+/// Initializes the Rocket application with OpenID Connect authentication support.
+///
+/// This function:
+/// - Loads OIDC configuration from the given `config`.
+/// - Calls `from_provider_oidc_config` to build the authentication state.
+/// - Registers authentication-related routes under the `/auth` path.
+/// - Attaches the authentication state as managed state in Rocket.
+///
+/// Returns the updated Rocket instance, or an error if the setup failed.
 pub async fn setup(
     rocket: rocket::Rocket<Build>,
     config: OIDCConfig,
 ) -> Result<Rocket<Build>, Box<dyn std::error::Error>> {
-    let auth_state = from_keycloak_oidc_config(config).await?;
+    let auth_state = from_provider_oidc_config(config).await?;
     Ok(rocket
         .manage(auth_state)
         .mount("/auth", routes::get_routes()))
 }
 
-pub fn register_validator(
-    rocket: rocket::Rocket<Build>,
-    validator: crate::client::Validator,
-) -> Rocket<Build> {
-    rocket.manage(validator)
+/// Stores authentication cookies in the user's browser after successful login.
+///
+/// This function:
+/// - Adds an `access_token` cookie (HTTP-only).
+/// - Serializes `IssuerData` containing the issuer URL and algorithm,
+///   and adds it as an `issuer_data` cookie (optionally readable by JavaScript).
+///
+/// # Parameters
+/// - `jar`: The Rocket cookie jar.
+/// - `access_token`: The signed JSON Web Token received after login.
+/// - `issuer`: The issuer URL (e.g., `http://localhost:8442`).
+/// - `algorithm`: The signing algorithm (e.g., `RS256`).
+///
+/// Returns `Ok(())` on success, or an error if JSON serialization fails.
+pub fn login(jar: &CookieJar<'_>, access_token: String, issuer: &str, algorithm: &str) -> Result<(), crate::Error> {
+    jar.add(
+        Cookie::build(("access_token", access_token))
+            .secure(false)
+            .http_only(true) // good practice
+            .same_site(SameSite::Lax), // or SameSite::Strict, if you prefer
+    );
+
+    // Create IssuerData with fixed values
+    let issuer_data = IssuerData {
+        issuer: issuer.to_string(),
+        algorithm: algorithm.to_string(),
+    };
+
+    // Serialize IssuerData to JSON string
+    let issuer_data_json = match serde_json::to_string(&issuer_data) {
+        Ok(json) => json,
+        Err(e) => return Err(Error::JsonErr(e))
+    };
+
+    jar.add(
+        Cookie::build(("issuer_data", issuer_data_json))
+            .secure(false)
+            .http_only(false) // set true if you want it inaccessible from JS
+            .same_site(SameSite::Lax)
+    );
+
+    Ok(())
 }

@@ -249,7 +249,7 @@ impl Validator {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let pubkeys = HashMap::new();
         let algo = Algorithm::from_str(&algorithm)?;
-        let mut validation = Validation::new(algo);
+        //let validation = Validation::new(algo);
         //validation.insecure_disable_signature_validation();
         let mut validator = Self {
             pubkeys,
