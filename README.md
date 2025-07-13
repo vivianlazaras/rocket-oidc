@@ -57,14 +57,6 @@ async fn protected(guard: Guard) -> RawHtml<String> {
     RawHtml(format!("<h1>Hello {} {}</h1>", userinfo.given_name(), userinfo.family_name()))
 }
 
-// this is an example route that exchanges tokens to use a different audiance
-// so that the API backend can access user data.
-#[post("/use-api")]
-async fn use_api(auth: &State<rocket_oidc::AuthState>) {
-    let access_token = auth.client.exchange_token();
-    // then use the token
-}
-
 #[launch]
 async fn rocket() -> _ {
     let mut rocket = rocket::build()

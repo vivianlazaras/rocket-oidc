@@ -5,7 +5,7 @@
 ```rust
 use serde_derive::{Serialize, Deserialize};
 use rocket::{catch, catchers, routes, launch, get};
-
+use rocket::Build;
 use rocket::State;
 use rocket::fs::FileServer;
 use rocket::response::{Redirect, content::RawHtml};
@@ -45,12 +45,12 @@ async fn protected(guard: Guard) -> RawHtml<String> {
 }
 
 #[launch]
-async fn rocket() -> _ {
+async fn rocket() -> rocket::Rocket<Build> {
     let mut rocket = rocket::build()
         .mount("/", routes![index])
         .register("/", catchers![unauthorized]);
-
-    rocket_oidc::setup(rocket, config.oidc().clone())
+    let config = OIDCConfig::from_env().unwrap();
+    rocket_oidc::setup(rocket, config)
         .await
         .unwrap()
 }
@@ -58,8 +58,10 @@ async fn rocket() -> _ {
 ## Auth Only
 you can use an AuthGuard<Claims> type which only validates the claims in the json web token and doesn't rely on a full OIDC implementation
 ```
+use rocket_oidc::OIDCConfig;
 #[launch]
-async fn rocket() -> _ {
+async fn rocket() -> rocket::Rocket<rocket::Build> {
+    let config = OIDCConfig::from_env().unwrap();
     let decoding_key = api.get_jwt_pubkey().await.unwrap();
         let validator = rocket_oidc::client::Validator::from_pubkey(
             config.api_endpoint().to_string(),
