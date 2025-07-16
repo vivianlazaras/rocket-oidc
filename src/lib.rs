@@ -491,33 +491,46 @@ pub async fn setup(
 /// - `issuer`: The issuer URL (e.g., `http://localhost:8442`).
 /// - `algorithm`: The signing algorithm (e.g., `RS256`).
 ///
-/// Returns `Ok(())` on success, or an error if JSON serialization fails.
-pub fn login(jar: &CookieJar<'_>, access_token: String, issuer: &str, algorithm: &str) -> Result<(), crate::Error> {
+/// Returns `Ok(Redirect)` on success, or an error if JSON serialization fails.
+pub fn login(
+    redirect: String,
+    jar: &CookieJar<'_>,
+    access_token: String,
+    issuer: &str,
+    algorithm: &str
+) -> Result<Redirect, crate::Error> {
+    // Add the access_token cookie
     jar.add(
         Cookie::build(("access_token", access_token))
             .secure(false)
-            .http_only(true) // good practice
-            .same_site(SameSite::Lax), // or SameSite::Strict, if you prefer
+            .http_only(true)
+            .same_site(SameSite::Lax)
     );
 
-    // Create IssuerData with fixed values
+    // Build issuer_data JSON
     let issuer_data = IssuerData {
         issuer: issuer.to_string(),
         algorithm: algorithm.to_string(),
     };
 
-    // Serialize IssuerData to JSON string
-    let issuer_data_json = match serde_json::to_string(&issuer_data) {
-        Ok(json) => json,
-        Err(e) => return Err(Error::JsonErr(e))
-    };
+    let issuer_data_json = serde_json::to_string(&issuer_data)
+        .map_err(crate::Error::JsonErr)?;
 
+    // Add issuer_data cookie
     jar.add(
         Cookie::build(("issuer_data", issuer_data_json))
             .secure(false)
-            .http_only(false) // set true if you want it inaccessible from JS
+            .http_only(false) // if you don't want JS access, set to true
             .same_site(SameSite::Lax)
     );
 
-    Ok(())
+    // Check for request_id cookie
+    let redirect_url = if let Some(cookie) = jar.get("request_id") {
+        let request_id = cookie.value();
+        format!("{}?state={}", redirect, request_id)
+    } else {
+        redirect
+    };
+
+    Ok(Redirect::to(redirect_url))
 }
