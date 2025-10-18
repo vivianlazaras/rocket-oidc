@@ -32,7 +32,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
         let validator = req
             .rocket()
             .state::<crate::client::Validator>()
-            .unwrap()
+            .expect("validator managed state not found")
             .clone();
 
         if let Some(access_token) = cookies.get("access_token") {
