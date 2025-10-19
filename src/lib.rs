@@ -214,7 +214,7 @@ impl CoreClaims for BaseClaims {
 
 /// Trait for extracting the subject identifier from any set of claims.
 /// this is also used as a marker trait
-pub trait CoreClaims {
+pub trait CoreClaims: Clone {
     fn subject(&self) -> &str;
 }
 

@@ -486,7 +486,7 @@ impl Validator {
     ///
     /// Returns the token's claims if valid, or an error otherwise.
     pub fn decode_with_iss_alg<
-        T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims,
+        T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims + Clone,
     >(
         &self,
         issuer: &str,
@@ -528,7 +528,7 @@ impl Validator {
     ///
     /// ⚠️ **Deprecated:** May not be correct if you handle multiple issuers or algorithms.
     #[deprecated]
-    pub fn decode<T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims>(
+    pub fn decode<T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims + Clone>(
         &self,
         access_token: &str,
     ) -> Result<TokenData<T>, crate::Error> {
