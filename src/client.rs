@@ -260,6 +260,26 @@ impl Validator {
         Ok(validator)
     }
 
+    /// Creates a new `Validator` from an RSA PEM encoded public key.
+    ///
+    /// This is a convenience wrapper around `from_pubkey` that accepts a PEM string
+    /// (PKCS#1 / PKCS#8 public key) and builds the `DecodingKey` for you.
+    ///
+    /// * `url` - Issuer URL (used to construct the KeyID).
+    /// * `audiance` - Expected audience claim.
+    /// * `algorithm` - Signing algorithm (e.g., "RS256").
+    /// * `pem` - RSA public key in PEM format.
+    pub fn from_rsa_pem(
+        url: String,
+        audiance: String,
+        algorithm: String,
+        pem: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let decoding_key = DecodingKey::from_rsa_pem(pem.as_bytes())
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        Self::from_pubkey(url, audiance, algorithm, decoding_key)
+    }
+
     /// Returns a sorted list of unique algorithms supported for the given issuer,
     /// based on the pubkeys map.
     pub fn get_supported_algorithms_for_issuer(&self, issuer: &str) -> Option<Vec<String>> {
@@ -275,6 +295,13 @@ impl Validator {
         algs.dedup();
 
         if algs.is_empty() { None } else { Some(algs) }
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            pubkeys: HashMap::new(),
+            default_iss: "".to_string(),
+        }
     }
 
     /// Loads public keys dynamically from a JWKS endpoint discovered from provider metadata.
@@ -349,7 +376,8 @@ impl Validator {
     ///
     /// # Example
     /// ```ignore
-    /// let mut validator = Validator::new(...);
+    /// use rocket_oidc::client::Validator;
+    /// let mut validator = Validator::empty();
     /// validator.extend_from_oidc("https://accounts.example.com").await?;
     /// ```
     pub async fn extend_from_oidc(
@@ -400,7 +428,7 @@ impl Validator {
     ///
     /// # Example
     /// ```ignore
-    /// let mut validator = Validator::new(...);
+    /// let mut validator = Validator::empty();
     /// let jwks_json = std::fs::read_to_string("keys.json")?;
     /// validator.extend_from_jwks("https://accounts.example.com", &jwks_json)?;
     /// ```

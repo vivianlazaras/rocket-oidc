@@ -57,14 +57,28 @@ async fn rocket() -> rocket::Rocket<Build> {
 ```
 ## Auth Only
 you can use an AuthGuard<Claims> type which only validates the claims in the json web token and doesn't rely on a full OIDC implementation
-```
+```rust
 use rocket_oidc::OIDCConfig;
+use rocket::{catchers, routes, catch, launch, get};
+use jsonwebtoken::DecodingKey;
+
+#[get("/")]
+async fn index() -> &'static str {
+    "Hello, world!"
+}
+
+#[catch(401)]
+fn unauthorized() -> &'static str {
+    "Unauthorized"
+}
+
 #[launch]
 async fn rocket() -> rocket::Rocket<rocket::Build> {
     let config = OIDCConfig::from_env().unwrap();
-    let decoding_key = api.get_jwt_pubkey().await.unwrap();
+    let decoding_key: DecodingKey = DecodingKey::from_rsa_pem(include_str!("public.pem").as_bytes()).ok().unwrap();
+
         let validator = rocket_oidc::client::Validator::from_pubkey(
-            config.api_endpoint().to_string(),
+            config.issuer_url.to_string(),
             "storyteller".to_string(),
             "RS256".to_string(),
             decoding_key,
@@ -88,12 +102,15 @@ use std::fmt::Debug;
 pub mod auth;
 pub mod client;
 pub mod routes;
+/// Utilities for acting as an OIDC token signer.
+pub mod sign;
 pub mod token;
 use crate::client::{IssuerData, KeyID};
 use client::{OIDCClient, Validator};
 use rocket::http::ContentType;
 use rocket::http::Cookie;
 use rocket::response;
+use rocket::response::Redirect;
 use rocket::response::Responder;
 use rocket::{
     Build, Request, Rocket,
@@ -108,9 +125,9 @@ use std::path::PathBuf;
 use openidconnect::AdditionalClaims;
 use openidconnect::reqwest;
 use openidconnect::*;
-use serde::{Deserialize, Serialize};
-use rocket::http::SameSite;
 use rocket::http::CookieJar;
+use rocket::http::SameSite;
+use serde::{Deserialize, Serialize};
 
 /// Holds the authentication state used by the application.
 ///
@@ -183,7 +200,6 @@ where
     // Include other claims you care about here
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BaseClaims {
     exp: i64,
@@ -200,6 +216,12 @@ impl CoreClaims for BaseClaims {
 /// this is also used as a marker trait
 pub trait CoreClaims {
     fn subject(&self) -> &str;
+}
+
+impl CoreClaims for serde_json::Value {
+    fn subject(&self) -> &str {
+        self.get("sub").and_then(|v| v.as_str()).unwrap_or_default()
+    }
 }
 
 impl<AC: AdditionalClaims, GC: GenderClaim> TryFrom<UserInfoClaims<AC, GC>> for UserInfo {
@@ -369,7 +391,9 @@ impl<'r> Responder<'r, 'static> for Error {
             Error::MissingClientId | Error::MissingClientSecret | Error::MissingIssuerUrl => {
                 Status::BadRequest
             }
-            Error::Reqwest(_) | Error::ConfigurationError(_) | Error::JsonErr(_) => Status::InternalServerError,
+            Error::Reqwest(_) | Error::ConfigurationError(_) | Error::JsonErr(_) => {
+                Status::InternalServerError
+            }
             Error::TokenError(_) | Error::MissingAlgoForIssuer(_) => Status::Unauthorized,
             Error::PubKeyNotFound(_) | Error::JsonWebToken(_) => Status::Unauthorized,
         };
@@ -406,7 +430,7 @@ impl Default for OIDCConfig {
 }
 
 /// Represents configuration parameters for OpenID Connect authentication.
-/// 
+///
 /// Typically loaded from environment variables at runtime.
 impl OIDCConfig {
     /// Returns the URL to redirect to after login has completed.
@@ -497,14 +521,14 @@ pub fn login(
     jar: &CookieJar<'_>,
     access_token: String,
     issuer: &str,
-    algorithm: &str
+    algorithm: &str,
 ) -> Result<Redirect, crate::Error> {
     // Add the access_token cookie
     jar.add(
         Cookie::build(("access_token", access_token))
             .secure(false)
             .http_only(true)
-            .same_site(SameSite::Lax)
+            .same_site(SameSite::Lax),
     );
 
     // Build issuer_data JSON
@@ -513,15 +537,14 @@ pub fn login(
         algorithm: algorithm.to_string(),
     };
 
-    let issuer_data_json = serde_json::to_string(&issuer_data)
-        .map_err(crate::Error::JsonErr)?;
+    let issuer_data_json = serde_json::to_string(&issuer_data).map_err(crate::Error::JsonErr)?;
 
     // Add issuer_data cookie
     jar.add(
         Cookie::build(("issuer_data", issuer_data_json))
             .secure(false)
             .http_only(false) // if you don't want JS access, set to true
-            .same_site(SameSite::Lax)
+            .same_site(SameSite::Lax),
     );
 
     // Check for request_id cookie
