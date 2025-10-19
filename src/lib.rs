@@ -12,7 +12,7 @@ use rocket::response::{Redirect, content::RawHtml};
 use rocket_oidc::{OIDCConfig, CoreClaims, OIDCGuard};
 
 #[non_exhaustive]
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UserGuard {
     pub email: String,
     pub sub: String,
