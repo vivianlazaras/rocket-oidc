@@ -50,7 +50,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
                                 access_token: access_token.value().to_string(),
                             }),
                             Err(err) => {
-                                eprintln!("token expired or invalid: {}", err);
+                                eprintln!("token expired or invalid: {}, issuer: {}, algorithm: {}", err, issuer_data.issuer, issuer_data.algorithm);
                                 cookies.remove(Cookie::build("access_token"));
                                 Outcome::Forward(Status::Unauthorized)
                             }
