@@ -39,7 +39,7 @@
 //! });
 //!
 //! // Sign for one hour.
-//! let token = signer.sign(claims, Duration::from_secs(3600))
+//! let token = signer.sign(claims)
 //!     .expect("failed to sign token");
 //!
 //! println!("signed JWT: {}", token);
@@ -146,13 +146,12 @@ impl OidcSigner {
     /// let (test_private_pem, _) = generate_rsa_pkcs8_pair();
     /// let signer = OidcSigner::from_rsa_pem(&test_private_pem, "test-kid").expect("failed to create signer");
     /// let claims = json!({ "sub": "user-123", "role": "admin" });
-    /// let token = signer.sign(claims, Duration::from_secs(3600)).unwrap();
+    /// let token = signer.sign(claims).unwrap();
     /// println!("JWT: {}", token);
     /// ```
     pub fn sign<T: Serialize>(
         &self,
         mut claims: T,
-        expires_in: Duration,
     ) -> Result<String, jsonwebtoken::errors::Error>
     where
         T: Serialize,
@@ -161,15 +160,40 @@ impl OidcSigner {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let exp = now + expires_in.as_secs();
+        let exp = now + 3600; // Default to 1 hour expiry
 
         // Optionally: wrap dynamic claims with exp/iat
         let mut map = serde_json::to_value(&claims)?
             .as_object_mut()
             .unwrap()
             .clone();
-        map.insert("exp".into(), serde_json::json!(exp));
-        map.insert("iat".into(), serde_json::json!(now));
+        
+        // Insert exp/iat if not already present
+        // This allows callers to override these values if desired.
+        // In theory the CoreClaims trait should encourage users to set these explicitly.
+        if !map.contains_key("exp") {
+            map.insert("exp".into(), serde_json::json!(exp));
+        }
+        if !map.contains_key("iat") {
+            map.insert("iat".into(), serde_json::json!(now));
+        }
+
+        // Insert a random aud if not present
+        // This is to satisfy validators that require an audience claim.
+        // and to ensure compliance with OIDC expectations.
+        // In practice, callers should set this explicitly.
+        // if the audience is not set explicitly this should cause validation failures, instead of silently passing, and opening up security holes.
+        if !map.contains_key("aud") {
+            map.insert("aud".into(), serde_json::json!(uuid::Uuid::new_v4().to_string()));
+        }
+
+        if !map.contains_key("iss") {
+            map.insert("iss".into(), serde_json::json!(uuid::Uuid::new_v4().to_string()));
+        }
+
+        if !map.contains_key("sub") {
+            map.insert("sub".into(), serde_json::json!(uuid::Uuid::new_v4().to_string()));
+        }
 
         let mut header = Header::new(self.algorithm);
         header.kid = Some(self.kid.clone());
@@ -178,23 +202,27 @@ impl OidcSigner {
     }
 }
 
-use rsa::{RsaPrivateKey, pkcs8::{EncodePrivateKey, EncodePublicKey}};
 use rand::rngs::OsRng;
+use rsa::{
+    RsaPrivateKey,
+    pkcs8::{EncodePrivateKey, EncodePublicKey},
+};
 
 pub fn generate_rsa_pkcs8_pair() -> (String, String) {
     // Generate a 2048-bit RSA private key
     let mut rng = OsRng;
 
-    let private_key = RsaPrivateKey::new(&mut rng, 2048)
-        .expect("failed to generate key");
+    let private_key = RsaPrivateKey::new(&mut rng, 2048).expect("failed to generate key");
 
     // Convert to PKCS#8 PEM
-    let private_key_pem = private_key.to_pkcs8_pem(Default::default())
+    let private_key_pem = private_key
+        .to_pkcs8_pem(Default::default())
         .expect("failed to encode private key");
 
     // Extract public key and encode as PEM
     let public_key = private_key.to_public_key();
-    let public_key_pem = public_key.to_public_key_pem(Default::default())
+    let public_key_pem = public_key
+        .to_public_key_pem(Default::default())
         .expect("failed to encode public key");
 
     (private_key_pem.to_string(), public_key_pem)
@@ -215,13 +243,12 @@ pub(crate) mod tests {
             .expect("failed to create signer");
         let token = signer
             .sign(
-                json!({ "sub": "user-123", "role": "admin" }),
-                Duration::from_secs(3600),
+                json!({ "sub": "user-123", "role": "admin", "iss": "http://localhost:8080", "aud": "test-audience" }),
             )
             .unwrap();
         let validator = Validator::from_rsa_pem(
             "http://localhost:8080".to_string(),
-            "test".to_string(),
+            "test-audience".to_string(),
             "RS256".to_string(),
             &test_public_pem,
         )

@@ -147,7 +147,7 @@ impl KeyID {
 /// Represents a manually configured public key endpoint for token validation.
 ///
 /// Contains validation rules and the decoding key used to verify signatures.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Endpoint {
     validation: Validation,
     pubkey: DecodingKey,
@@ -172,7 +172,7 @@ impl Endpoint {
 ///
 /// Typically used when your application needs to accept tokens from multiple providers
 /// (e.g., multiple OpenID Connect issuers) or support multiple signing algorithms.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Validator {
     // A mapping from composite key identifiers (`KeyID`) — usually derived from issuer and algorithm —
     // to the corresponding validation endpoint (`Endpoint`) containing the decoding key and validation rules.
@@ -528,7 +528,9 @@ impl Validator {
     ///
     /// ⚠️ **Deprecated:** May not be correct if you handle multiple issuers or algorithms.
     #[deprecated]
-    pub fn decode<T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims + Clone>(
+    pub fn decode<
+        T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims + Clone,
+    >(
         &self,
         access_token: &str,
     ) -> Result<TokenData<T>, crate::Error> {

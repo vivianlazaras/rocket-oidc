@@ -20,13 +20,38 @@ pub struct UserGuard {
     pub email_verified: Option<bool>,
 }
 
-impl CoreClaims for UserGuard {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct UserClaims {
+    guard: UserGuard,
+    pub iss: String,
+    pub aud: String,
+    exp: i64,
+    iat: i64,
+}
+
+impl CoreClaims for UserClaims {
     fn subject(&self) -> &str {
-        self.sub.as_str()
+        self.guard.sub.as_str()
+    }
+
+    fn issuer(&self) -> &str {
+        self.iss.as_str()
+    }
+
+    fn audience(&self) -> &str {
+        self.aud.as_str()
+    }
+
+    fn issued_at(&self) -> i64 {
+        self.iat
+    }
+
+    fn expiration(&self) -> i64 {
+        self.exp
     }
 }
 
-pub type Guard = OIDCGuard<UserGuard>;
+pub type Guard = OIDCGuard<UserClaims>;
 
 #[catch(401)]
 fn unauthorized() -> Redirect {
@@ -204,11 +229,32 @@ where
 struct BaseClaims {
     exp: i64,
     sub: String,
+    iss: String,
+    alg: String,
+    aud: String,
+    iat: i64,
+
 }
 
 impl CoreClaims for BaseClaims {
     fn subject(&self) -> &str {
         &self.sub
+    }
+
+    fn issuer(&self) -> &str {
+        &self.iss
+    }
+
+    fn audience(&self) -> &str {
+        &self.aud
+    }
+
+    fn issued_at(&self) -> i64 {
+        self.iat
+    }
+
+    fn expiration(&self) -> i64 {
+        self.exp
     }
 }
 
@@ -216,11 +262,29 @@ impl CoreClaims for BaseClaims {
 /// this is also used as a marker trait
 pub trait CoreClaims: Clone {
     fn subject(&self) -> &str;
+    fn issuer(&self) -> &str;
+    fn audience(&self) -> &str;
+    fn issued_at(&self) -> i64;
+    fn expiration(&self) -> i64 {
+        3600 // default to 1 hour``   
+    }
 }
 
 impl CoreClaims for serde_json::Value {
     fn subject(&self) -> &str {
         self.get("sub").and_then(|v| v.as_str()).unwrap_or_default()
+    }
+
+    fn issuer(&self) -> &str {
+        self.get("iss").and_then(|v| v.as_str()).unwrap_or_default()
+    }
+
+    fn audience(&self) -> &str {
+        self.get("aud").and_then(|v| v.as_str()).unwrap_or_default()
+    }
+
+    fn issued_at(&self) -> i64 {
+        self.get("iat").and_then(|v| v.as_i64()).unwrap_or_default()
     }
 }
 
