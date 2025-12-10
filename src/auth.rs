@@ -7,11 +7,9 @@ use rocket::Request;
 use rocket::http::{Cookie, Status};
 use rocket::request::{FromRequest, Outcome};
 use serde::{Serialize, de::DeserializeOwned};
-use serde_derive::Deserialize;
 use std::fmt::Debug;
 
 use crate::client::{Validator};
-use crate::sign::OidcSigner;
 
 #[derive(Debug, Clone)]
 pub struct AuthGuard<T: Serialize + DeserializeOwned + Debug> {
@@ -114,6 +112,8 @@ fn parse_authorization_header<T: Serialize + Debug + DeserializeOwned + std::mar
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use crate::sign::OidcSigner;
+    use serde_derive::{Deserialize};
     
     fn iat_to_exp() -> (i64, i64) {
         let now = SystemTime::now()

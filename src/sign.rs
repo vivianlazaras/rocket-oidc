@@ -53,7 +53,7 @@
 //!   `aud` and expiry when consuming tokens.
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde::Serialize;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// An OpenID Connect (OIDC) JWT signer backed by an encoding key.
 ///
@@ -151,7 +151,7 @@ impl OidcSigner {
     /// ```
     pub fn sign<T: Serialize>(
         &self,
-        mut claims: T,
+        claims: T,
     ) -> Result<String, jsonwebtoken::errors::Error>
     where
         T: Serialize,
@@ -228,6 +228,7 @@ pub fn generate_rsa_pkcs8_pair() -> (String, String) {
     (private_key_pem.to_string(), public_key_pem)
 }
 
+#[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::Validator;
