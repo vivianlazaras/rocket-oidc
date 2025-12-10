@@ -562,6 +562,7 @@ pub async fn setup(
 ) -> Result<Rocket<Build>, Box<dyn std::error::Error>> {
     let auth_state = from_provider_oidc_config(config).await?;
     Ok(rocket
+        .manage(auth_state.validator.clone())
         .manage(auth_state)
         .mount("/auth", routes::get_routes()))
 }
