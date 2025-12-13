@@ -4,7 +4,7 @@ version = "0.1.4"
 edition = "2024"
 description = "Rocket OpenID Connect utility crate, provides redirect route, and claims guard for OIDC"
 license = "MIT"
-repo = "https://github.com/divinusdracodominus/rocket_oidc"
+repository = "https://github.com/vivianlazaras/rocket_oidc"
 
 [dependencies]
 cookie = "0.18.1"
@@ -24,4 +24,3 @@ structopt = "0.3.26"
 time = "0.3.41"
 tokio = "1.45.0"
 uuid = { version = "1.18.1", features = ["v4"]}
-

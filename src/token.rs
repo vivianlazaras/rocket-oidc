@@ -1,6 +1,73 @@
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
+use tokio::sync::RwLock;
+use std::sync::Arc;
+use std::fmt::Debug;
+use crate::CoreClaims;
+
+/// token provider information.
+pub trait TokenProvider: Clone + Debug {
+    fn token_endpoint(&self) -> &str;
+    fn client_id(&self) -> &str;
+    fn client_secret(&self) -> Option<&str>;
+}
+
+/// provides functionality for caching exchanged tokens
+#[derive(Debug, Clone)]
+pub struct SessionBearer<P: TokenProvider> {
+    tokens: Arc<RwLock<HashMap<String, String>>>,
+    provider: P,
+}
+
+impl<P: TokenProvider> SessionBearer<P> {
+    pub fn new(provider: P) -> Self {
+        Self {
+            tokens: Arc::new(RwLock::new(HashMap::new())),
+            provider,
+        }
+    }
+
+    /// Perform (or retrieve cached) OAuth 2.0 Token Exchange (RFC 8693)
+    pub async fn exchange<S: CoreClaims>(
+        &self,
+        claims: S,
+        audience: &str,
+    ) -> Result<String, reqwest::Error> {
+        let subject_token = claims.subject();
+        
+        let cache_key = format!("{}::{}", subject_token, audience);
+
+        // Fast path: cache hit
+        if let Some(token) = self.tokens.read().await.get(&cache_key).cloned() {
+            return Ok(token);
+        }
+
+        // Client secret is required for this flow
+        let client_secret = self.provider.client_secret()
+            .expect("client_secret required for token exchange");
+
+        let response = perform_token_exchange(
+            self.provider.token_endpoint(),
+            self.provider.client_id(),
+            client_secret,
+            subject_token,
+            audience,
+        )
+        .await?;
+
+        let access_token = response.access_token().to_string();
+
+        // Store in cache
+        self.tokens
+            .write()
+            .await
+            .insert(cache_key, access_token.clone());
+
+        Ok(access_token)
+    }
+
+}
 
 #[derive(Deserialize, Debug)]
 pub struct TokenExchangeResponse {
