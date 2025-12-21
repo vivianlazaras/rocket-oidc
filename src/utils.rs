@@ -11,6 +11,25 @@ use rsa::pkcs1::DecodeRsaPrivateKey;
 use std::collections::HashSet;
 use serde_json::Value;
 
+/// a convience method to handle singleton or sequence when deserializing values with serde.
+pub fn string_or_vec<'de, D>(deserializer: D) -> Result<HashSet<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Helper {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    Ok(match Helper::deserialize(deserializer)? {
+        Helper::One(s) => [s].into_iter().collect(),
+        Helper::Many(v) => v.into_iter().collect(),
+    })
+}
+
+
 pub fn string_or_array_to_set(value: Option<&Value>) -> HashSet<String> {
     let mut set = HashSet::new();
 

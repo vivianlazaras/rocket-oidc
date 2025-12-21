@@ -315,8 +315,10 @@ where
 struct BaseClaims {
     exp: i64,
     sub: String,
+    #[serde(deserialize_with = "string_or_vec")]
     iss: HashSet<String>,
     alg: String,
+    #[serde(deserialize_with = "string_or_vec")]
     aud: HashSet<String>,
     iat: i64,
 }
