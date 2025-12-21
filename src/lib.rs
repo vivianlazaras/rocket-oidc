@@ -639,7 +639,7 @@ pub async fn setup(
 ) -> Result<Rocket<Build>, Box<dyn std::error::Error>> {
     let auth_state = from_provider_oidc_config(config).await?;
     if cfg!(debug_assertions) {
-        println!("using validator: {:?}", validator);
+        println!("using validator: {:?}", auth_state.validator);
     }
     Ok(rocket
         .manage(auth_state.validator.clone())
