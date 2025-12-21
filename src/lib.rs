@@ -199,14 +199,15 @@ pub(crate) fn sign_session_token(
     let now = OffsetDateTime::now_utc();
     let new_exp = now + Duration::seconds(session.expiration_seconds as i64);
     let new_iss = &session.issuer_url;
-    /// sets a new expiration based off of iat
+    let new_sid = Uuid::new_v4().to_string();
+    // sets a new expiration based off of iat
     set_i64(&mut new_claims, "exp", new_exp.unix_timestamp());
-    /// sets the new iat claim (initiated at)
+    // sets the new iat claim (initiated at)
     set_i64(&mut new_claims, "iat", now.unix_timestamp());
     // sets the issuer to self
     set_str(&mut new_claims, "iss", new_iss);
     // sets a new session ID
-    set_str(&mut new_claims, "sid", Uuid::new_v4());
+    set_str(&mut new_claims, "sid", &new_sid);
     let token = session.signing_key().sign(&new_claims)?;
     Ok((token, new_exp))
 }
