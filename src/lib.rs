@@ -316,10 +316,10 @@ struct BaseClaims {
     exp: i64,
     sub: String,
     #[serde(deserialize_with = "string_or_vec")]
-    iss: HashSet<String>,
+    iss: Vec<String>,
     alg: String,
     #[serde(deserialize_with = "string_or_vec")]
-    aud: HashSet<String>,
+    aud: Vec<String>,
     iat: i64,
 }
 
@@ -328,12 +328,12 @@ impl CoreClaims for BaseClaims {
         &self.sub
     }
 
-    fn issuer(&self) -> HashSet<String> {
-        self.iss.clone()
+    fn issuer(&self) -> &[String] {
+        &self.iss
     }
 
-    fn audience(&self) -> HashSet<String> {
-        self.aud.clone()
+    fn audience(&self) -> &[String] {
+        &self.aud
     }
 
     fn issued_at(&self) -> i64 {
@@ -349,14 +349,15 @@ impl CoreClaims for BaseClaims {
 /// this is also used as a marker trait
 pub trait CoreClaims: Clone {
     fn subject(&self) -> &str;
-    fn issuer(&self) -> HashSet<String>;
-    fn audience(&self) -> HashSet<String>;
+    fn issuer(&self) -> &[String];
+    fn audience(&self) -> &[String];
     fn issued_at(&self) -> i64;
     fn expiration(&self) -> i64 {
         3600 // default to 1 hour``   
     }
 }
 
+/// this impl intentionally leaks memory and should thus only ever be used for testing
 impl CoreClaims for Value {
     fn subject(&self) -> &str {
         self.get("sub")
@@ -364,14 +365,28 @@ impl CoreClaims for Value {
             .unwrap_or("")
     }
 
-    fn issuer(&self) -> HashSet<String> {
-        // RFC: iss is a single string
-        string_or_array_to_set(self.get("iss"))
+    fn issuer(&self) -> &[String] {
+        if cfg!(debug_assertions) {
+            panic!("not intended for release builds, this has a memory leak by design")
+        }
+        unsafe {
+            match self.get("iss") {
+                Some(val) => value_to_str_slice(val),
+                None => &[],
+            }
+        }
     }
 
-    fn audience(&self) -> HashSet<String> {
-        // RFC: aud is string OR array
-        string_or_array_to_set(self.get("aud"))
+    fn audience(&self) -> &[String] {
+        if cfg!(debug_assertions) {
+            panic!("not intended for release builds, this has a memory leak by design")
+        }
+        unsafe {
+            match self.get("aud") {
+                Some(val) => value_to_str_slice(val),
+                None => &[],
+            }
+        }
     }
 
     fn issued_at(&self) -> i64 {

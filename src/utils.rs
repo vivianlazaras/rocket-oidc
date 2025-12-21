@@ -7,12 +7,13 @@ use rsa::pkcs8::{DecodePrivateKey, EncodePublicKey};
 use jsonwebtoken::DecodingKey;
 use crate::errors::OIDCError;
 use rsa::pkcs1::DecodeRsaPrivateKey;
+use serde::{Deserialize, Deserializer};
 
 use std::collections::HashSet;
 use serde_json::Value;
 
 /// a convience method to handle singleton or sequence when deserializing values with serde.
-pub fn string_or_vec<'de, D>(deserializer: D) -> Result<HashSet<String>, D::Error>
+pub fn string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -30,24 +31,30 @@ where
 }
 
 
-pub fn string_or_array_to_set(value: Option<&Value>) -> HashSet<String> {
-    let mut set = HashSet::new();
+/// this function intentionally leaks memory.
+pub unsafe fn value_to_str_slice(value: &Value) -> &[String] {
+    // static empty slice for fallback
+    static EMPTY_SLICE: &[String] = &[];
 
     match value {
-        Some(Value::String(s)) => {
-            set.insert(s.clone());
-        }
-        Some(Value::Array(arr)) => {
+        Value::String(s) => std::slice::from_ref(s),
+        Value::Array(arr) => {
+            // collect &str references from array
+            // store in a temporary Vec, then leak it for 'static lifetime
+            // (this is the simplest if you must return a slice)
+            // Alternative is to return Cow<[&str]> to avoid leaking
+            let mut temp: Vec<String> = Vec::with_capacity(arr.len());
             for v in arr {
-                if let Some(s) = v.as_str() {
-                    set.insert(s.to_owned());
-                }
+                temp.push(v.to_string());
+            }
+            if temp.is_empty() {
+                EMPTY_SLICE
+            } else {
+                temp.leak()
             }
         }
-        _ => {}
+        _ => EMPTY_SLICE,
     }
-
-    set
 }
 
 
