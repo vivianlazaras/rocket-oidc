@@ -133,6 +133,7 @@ use errors::{OIDCError, UserInfoErr};
 pub mod sign;
 pub mod token;
 
+use uuid::Uuid;
 use crate::client::WorkingConfig;
 use crate::client::WorkingSessionConfig;
 use crate::client::{IssuerData, KeyID};
