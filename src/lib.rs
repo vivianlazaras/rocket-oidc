@@ -186,8 +186,9 @@ impl AuthState {
         &self,
         jar: &CookieJar<'_>,
         code: String,
-        iss: String,
+        issuer: String,
     ) -> Result<Redirect, OIDCError> {
+        
         // ── 1. Short-circuit if valid access_token exists
         if let Some(cookie) = jar.get("access_token") {
             let (_, expired) = check_expiration(&cookie);
@@ -195,6 +196,11 @@ impl AuthState {
                 return Ok(Redirect::to(self.config.post_login().to_string()));
             }
         }
+
+        let iss = match self.config.session_config() {
+            Some(session) => &session.issuer_url,
+            None => &issuer,
+        };
 
         // ── 2. Exchange authorization code for token
         let token = self
