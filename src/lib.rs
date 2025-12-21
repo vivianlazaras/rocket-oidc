@@ -209,7 +209,7 @@ impl AuthState {
         issuer: String,
     ) -> Result<Redirect, OIDCError> {
         // ── 1. Short-circuit if valid access_token exists
-        if let Some(cookie) = jar.get("access_token") {
+        if let Some(cookie) = jar.get_private("access_token") {
             let (_, expired) = check_expiration(&cookie);
             if !expired {
                 return Ok(Redirect::to(self.config.post_login().to_string()));
