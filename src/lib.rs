@@ -120,25 +120,24 @@ async fn rocket() -> rocket::Rocket<rocket::Build> {
 */
 #[macro_use]
 extern crate rocket;
-#[macro_use]
-extern crate err_derive;
 
 use std::fmt::Debug;
 pub mod auth;
 pub mod client;
 pub mod routes;
 pub mod errors;
+pub mod utils;
+
 use errors::{OIDCError, UserInfoErr};
 /// Utilities for acting as an OIDC token signer.
 pub mod sign;
 pub mod token;
+
+use utils::*;
 use crate::client::{IssuerData, KeyID};
 use client::{OIDCClient, Validator};
-use rocket::http::ContentType;
 use rocket::http::Cookie;
-use rocket::response;
 use rocket::response::Redirect;
-use rocket::response::Responder;
 use crate::client::WorkingSessionConfig;
 use time::Duration;
 use time::OffsetDateTime;
@@ -153,12 +152,10 @@ use std::env;
 use std::path::PathBuf;
 
 use openidconnect::AdditionalClaims;
-use openidconnect::reqwest;
 use openidconnect::*;
 use rocket::http::CookieJar;
 use rocket::http::SameSite;
 use serde::{Deserialize, Serialize};
-use cookie::Expiration;
 
 pub(crate) fn sign_session_token(
     claims: &BaseClaims,
@@ -169,21 +166,6 @@ pub(crate) fn sign_session_token(
     new_claims.exp = new_exp.unix_timestamp();
     let token = session.signing_key().sign(&new_claims)?;
     Ok((token, new_exp))
-}
-
-pub fn check_expiration(cookie: &Cookie<'_>) -> (Option<OffsetDateTime>, bool) {
-    match cookie.expires() {
-        Some(Expiration::Session) => (None, false),
-        Some(Expiration::DateTime(offset)) => {
-            let ts = OffsetDateTime::now_utc();
-            if offset > ts {
-                return (Some(offset), false);
-            } else {
-                return (Some(offset), true);
-            }
-        }
-        None => (None, false),
-    }
 }
 
 /// Holds the authentication state used by the application.
@@ -251,7 +233,7 @@ impl AuthState {
         // ── 5. Optionally re-sign the access token for your session config
         let (token, exp) = if let Some(session) = self.config.session_config() {
             // decode the original access token claims
-            let mut claims = self
+            let claims = self
                 .validator
                 .decode_with_iss_alg::<BaseClaims>(
                     token.access_token().secret(),

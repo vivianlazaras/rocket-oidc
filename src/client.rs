@@ -19,7 +19,6 @@ use crate::token::*;
 use serde::de::DeserializeOwned;
 use std::collections::HashSet;
 use std::path::Path;
-use tokio::{fs::File, io::AsyncReadExt};
 use crate::sign::OidcSigner;
 
 use openidconnect::reqwest;
