@@ -241,7 +241,7 @@ pub(crate) mod tests {
         // --- 1. Create signer ---
         let (private_pem, public_pem) = crate::sign::generate_rsa_pkcs8_pair();
         let signer = OidcSigner::from_rsa_pem(&private_pem, "test-kid")?;
-        let decoding_key = DecodingKey::from_rsa_pem(&public_pem.as_bytes()).expect("failed to parse decoding key");
+        let decoding_key = signer.decoding_key();
         println!("signer: {:?}", signer);
         println!("decoding_key: {:?}", decoding_key);
         // --- 2. Build claims ---

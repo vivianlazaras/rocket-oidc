@@ -238,15 +238,16 @@ impl AuthState {
         // ── 5. Optionally re-sign the access token for your session config
         let (token, exp) = if let Some(session) = self.config.session_config() {
             // decode the original access token claims
+            // forgot this was the old token, not the new one, so use old issuer
             let claims = self.validator.decode_with_iss_alg::<BaseClaims>(
-                &iss,
+                &issuer,
                 &chosen_alg,
                 token.access_token().secret(),
             )?;
             sign_session_token(&claims.claims, session)?
         } else {
             let claims = self.validator.decode_with_iss_alg::<BaseClaims>(
-                &iss,
+                &issuer,
                 &chosen_alg,
                 token.access_token().secret(),
             )?;
