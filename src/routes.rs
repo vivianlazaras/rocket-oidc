@@ -2,6 +2,7 @@ use crate::AuthState;
 use crate::BaseClaims;
 use crate::client::IssuerData;
 use cookie::Expiration;
+use crate::check_expiration;
 use openidconnect::{AuthenticationFlow, CsrfToken, Nonce, Scope};
 use openidconnect::{AuthorizationCode, OAuth2TokenResponse, core::CoreResponseType};
 use rocket::http::SameSite;
@@ -27,21 +28,6 @@ pub async fn keycloak(auth_state: &State<AuthState>) -> Redirect {
     Redirect::to(authorize_url.to_string())
 }
 
-fn check_expiration(cookie: &Cookie<'_>) -> (Option<OffsetDateTime>, bool) {
-    match cookie.expires() {
-        Some(Expiration::Session) => (None, false),
-        Some(Expiration::DateTime(offset)) => {
-            let ts = OffsetDateTime::now_utc();
-            if offset > ts {
-                return (Some(offset), false);
-            } else {
-                return (Some(offset), true);
-            }
-        }
-        None => (None, false),
-    }
-}
-
 #[get("/callback?<code>&<state>&<iss>&<session_state>")]
 pub async fn callback(
     jar: &CookieJar<'_>,
@@ -50,7 +36,7 @@ pub async fn callback(
     state: String,
     session_state: String,
     iss: String,
-) -> Result<Redirect, crate::Error> {
+) -> Result<Redirect, crate::errors::OIDCError> {
     // ── 1. Short-circuit if valid access_token is already there
     if let Some(cookie) = jar.get("access_token") {
         let (expiration, expired) = check_expiration(&cookie);
@@ -83,7 +69,7 @@ pub async fn callback(
         .get_supported_algorithms_for_issuer(&iss)
         .ok_or_else(|| {
             eprintln!("unknown issuer: {}", iss);
-            crate::Error::MissingIssuerUrl
+            crate::errors::OIDCError::MissingIssuerUrl
         })?;
 
     // For this example: prefer RS256 if available, else pick the first supported
@@ -92,7 +78,7 @@ pub async fn callback(
     } else if let Some(first) = supported_algs.first() {
         first.clone()
     } else {
-        return Err(crate::Error::MissingAlgoForIssuer(iss.into()));
+        return Err(crate::errors::OIDCError::MissingAlgoForIssuer(iss.into()));
     };
 
     // ── 4. Store access_token

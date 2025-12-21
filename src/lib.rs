@@ -127,6 +127,8 @@ use std::fmt::Debug;
 pub mod auth;
 pub mod client;
 pub mod routes;
+pub mod errors;
+use errors::{OIDCError, UserInfoErr};
 /// Utilities for acting as an OIDC token signer.
 pub mod sign;
 pub mod token;
@@ -137,6 +139,10 @@ use rocket::http::Cookie;
 use rocket::response;
 use rocket::response::Redirect;
 use rocket::response::Responder;
+use crate::client::WorkingSessionConfig;
+use time::Duration;
+use time::OffsetDateTime;
+use crate::client::WorkingConfig;
 use rocket::{
     Build, Request, Rocket,
     http::Status,
@@ -144,7 +150,6 @@ use rocket::{
 };
 use serde::de::DeserializeOwned;
 use std::env;
-use std::io::Cursor;
 use std::path::PathBuf;
 
 use openidconnect::AdditionalClaims;
@@ -153,6 +158,33 @@ use openidconnect::*;
 use rocket::http::CookieJar;
 use rocket::http::SameSite;
 use serde::{Deserialize, Serialize};
+use cookie::Expiration;
+
+pub(crate) fn sign_session_token(
+    claims: &BaseClaims,
+    session: &WorkingSessionConfig,
+) -> Result<(String, OffsetDateTime), OIDCError> {
+    let mut new_claims = claims.clone();
+    let new_exp = OffsetDateTime::now_utc() + Duration::seconds(session.expiration_seconds as i64);
+    new_claims.exp = new_exp.unix_timestamp();
+    let token = session.signing_key().sign(&new_claims)?;
+    Ok((token, new_exp))
+}
+
+pub fn check_expiration(cookie: &Cookie<'_>) -> (Option<OffsetDateTime>, bool) {
+    match cookie.expires() {
+        Some(Expiration::Session) => (None, false),
+        Some(Expiration::DateTime(offset)) => {
+            let ts = OffsetDateTime::now_utc();
+            if offset > ts {
+                return (Some(offset), false);
+            } else {
+                return (Some(offset), true);
+            }
+        }
+        None => (None, false),
+    }
+}
 
 /// Holds the authentication state used by the application.
 ///
@@ -164,7 +196,84 @@ use serde::{Deserialize, Serialize};
 pub struct AuthState {
     pub validator: Validator,
     pub client: OIDCClient,
-    pub config: OIDCConfig,
+    pub config: WorkingConfig,
+}
+
+impl AuthState {
+    pub async fn handle_callback(
+        &self,
+        jar: &CookieJar<'_>,
+        code: String,
+        iss: String,
+    ) -> Result<Redirect, OIDCError> {
+        // ── 1. Short-circuit if valid access_token exists
+        if let Some(cookie) = jar.get("access_token") {
+            let (_, expired) = check_expiration(&cookie);
+            if !expired {
+                return Ok(Redirect::to(self.config.post_login().to_string()));
+            }
+        }
+
+        // ── 2. Exchange authorization code for token
+        let token = self
+            .client
+            .exchange_code(AuthorizationCode::new(code))
+            .await?;
+
+        // ── 3. Determine expiration
+        let expires_at = match token.expires_in() {
+            Some(expires_in) => OffsetDateTime::now_utc() + expires_in,
+            None => {
+                let token_data = self
+                    .validator
+                    .decode::<BaseClaims>(token.access_token().secret())?;
+
+                OffsetDateTime::from_unix_timestamp(token_data.claims.exp as i64)
+                    .unwrap_or_else(|_| OffsetDateTime::now_utc())
+            }
+        };
+
+        // ── 4. Select algorithm for issuer
+        let supported_algs = self
+            .validator
+            .get_supported_algorithms_for_issuer(&iss)
+            .ok_or(OIDCError::MissingIssuerUrl)?;
+
+        let chosen_alg = if supported_algs.iter().any(|a| a == "RS256") {
+            "RS256".to_string()
+        } else {
+            supported_algs
+                .first()
+                .cloned()
+                .ok_or(OIDCError::MissingAlgoForIssuer(iss.clone()))?
+        };
+
+        // ── 5. Optionally re-sign the access token for your session config
+        let (token, exp) = if let Some(session) = self.config.session_config() {
+            // decode the original access token claims
+            let mut claims = self
+                .validator
+                .decode_with_iss_alg::<BaseClaims>(
+                    token.access_token().secret(),
+                    &iss,
+                    &chosen_alg,
+                )?;
+            sign_session_token(&claims.claims, session)?
+        }else{
+            let claims = self
+                .validator
+                .decode_with_iss_alg::<BaseClaims>(
+                    token.access_token().secret(),
+                    &iss,
+                    &chosen_alg,
+                )?;
+            (token.access_token().secret().to_string(), OffsetDateTime::from_unix_timestamp(claims.claims.exp)?)
+        };
+
+        // ── 6. Finalize login (also sets original token if you still want it)
+        let redirect = self.config.post_login().to_string();
+        crate::login(redirect.clone(), jar, token, &iss, &chosen_alg, Some(exp))
+    }
 }
 
 /// Represents a localized claim value, such as a name or address
@@ -196,18 +305,6 @@ impl UserInfo {
     pub fn given_name(&self) -> &str {
         &self.given_name
     }
-}
-
-/// Errors that can occur when parsing or converting user info claims.
-#[derive(Debug, Clone, Error)]
-#[error(display = "failed to parse user info: ", _0)]
-pub enum UserInfoErr {
-    #[error(display = "missing given name")]
-    MissingGivenName,
-    #[error(display = "missing family name")]
-    MissingFamilyName,
-    #[error(display = "missing profile picture url")]
-    MissingPicture,
 }
 
 /// Guard type used in Rocket request handling that holds validated JWT claims
@@ -410,63 +507,42 @@ pub async fn from_provider_oidc_config(
     Ok(AuthState {
         client,
         validator,
-        config,
+        config: (&config).try_into()?,
     })
 }
 
-pub type TokenErr = RequestTokenError<
-    HttpClientError<reqwest::Error>,
-    openidconnect::StandardErrorResponse<openidconnect::core::CoreErrorResponseType>,
->;
-
-/// Top-level error type for the authentication layer.
-///
-/// Includes missing configuration, HTTP errors, token validation failures,
-/// and JSON parsing issues.
-#[derive(Debug, Error)]
-#[error(display = "failed to start rocket OIDC routes: {}", _0)]
-pub enum Error {
-    #[error(display = "missing client id")]
-    MissingClientId,
-    #[error(display = "missing client secret")]
-    MissingClientSecret,
-    #[error(display = "missing issuer url")]
-    MissingIssuerUrl,
-    #[error(display = "missing algorithim for issuer")]
-    MissingAlgoForIssuer(String),
-    #[error(display = "failed to fetch: {}", _0)]
-    Reqwest(#[error(source)] reqwest::Error),
-    #[error(display = "openidconnect configuration error: {}", _0)]
-    ConfigurationError(#[error(source)] ConfigurationError),
-    #[error(display = "token validation error: {}", _0)]
-    TokenError(#[error(source)] TokenErr),
-    #[error(display = "pubkey not found when trying to decode access token")]
-    PubKeyNotFound(KeyID),
-    #[error(display = "failed to parse json web key: {}", _0)]
-    JsonWebToken(#[source] jsonwebtoken::errors::Error),
-    #[error(display = "failed to parse or serialize json: {}", _0)]
-    JsonErr(serde_json::Error),
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct SessionConfig {
+    pub signing_key_path: PathBuf,
+    pub issuer_url: String,
+    pub expiration_seconds: Option<u64>,
 }
 
-impl<'r> Responder<'r, 'static> for Error {
-    fn respond_to(self, _request: &'r Request<'_>) -> response::Result<'static> {
-        let body = self.to_string();
-        let status = match &self {
-            Error::MissingClientId | Error::MissingClientSecret | Error::MissingIssuerUrl => {
-                Status::BadRequest
-            }
-            Error::Reqwest(_) | Error::ConfigurationError(_) | Error::JsonErr(_) => {
-                Status::InternalServerError
-            }
-            Error::TokenError(_) | Error::MissingAlgoForIssuer(_) => Status::Unauthorized,
-            Error::PubKeyNotFound(_) | Error::JsonWebToken(_) => Status::Unauthorized,
+impl SessionConfig {
+    pub fn from_env() -> Option<Self> {
+        let signing_key_path = match env::var("SESSION_SIGNING_KEY") {
+            Ok(path) => PathBuf::from(path),
+            _ => return None,
         };
 
-        response::Response::build()
-            .status(status)
-            .header(ContentType::Plain)
-            .sized_body(body.len(), Cursor::new(body))
-            .ok()
+        let issuer_url = match env::var("SESSION_ISSUER_URL") {
+            Ok(url) => url,
+            _ => return None,
+        };
+
+        let expiration_seconds = match env::var("SESSION_EXPIRATION_SECONDS") {
+            Ok(seconds_str) => match seconds_str.parse::<u64>() {
+                Ok(seconds) => Some(seconds),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        Some(Self {
+            signing_key_path,
+            issuer_url,
+            expiration_seconds,
+        })
     }
 }
 
@@ -477,6 +553,7 @@ pub struct OIDCConfig {
     pub issuer_url: String,
     pub redirect: String,
     pub post_login: Option<String>,
+    pub session: Option<SessionConfig>,
 }
 
 /// please note this is just an example, and should not be used in production builds
@@ -489,6 +566,7 @@ impl Default for OIDCConfig {
             issuer_url: "http://keycloak.com/realms/master".to_string(),
             redirect: "http://localhost:8000/".to_string(),
             post_login: None,
+            session: None,
         }
     }
 }
@@ -518,23 +596,33 @@ impl OIDCConfig {
     /// - `REDIRECT_URL`: Redirect URI after login (defaults to `/profile` if unset).
     ///
     /// Returns an error if any required variable is missing.
-    pub fn from_env() -> Result<Self, Error> {
+    pub fn from_env() -> Result<Self, OIDCError> {
         let client_id = match env::var("CLIENT_ID") {
             Ok(client_id) => client_id,
-            _ => return Err(Error::MissingClientId),
+            _ => return Err(OIDCError::MissingClientId),
         };
         let client_secret = match env::var("CLIENT_SECRET") {
             Ok(secret) => secret.into(),
-            _ => return Err(Error::MissingClientSecret),
+            _ => return Err(OIDCError::MissingClientSecret),
         };
         let issuer_url = match env::var("ISSUER_URL") {
             Ok(url) => url,
-            _ => return Err(Error::MissingIssuerUrl),
+            _ => return Err(OIDCError::MissingIssuerUrl),
         };
 
         let redirect = match env::var("REDIRECT_URL") {
             Ok(redirect) => redirect,
             _ => String::from("/profile"),
+        };
+
+        let session_signing_key = match env::var("SESSION_SIGNING_KEY") {
+            Ok(path) => Some(PathBuf::from(path)),
+            _ => None,
+        };
+
+        let session_issuer_url = match env::var("SESSION_ISSUER_URL") {
+            Ok(url) => Some(url),
+            _ => None,
         };
 
         Ok(Self {
@@ -543,6 +631,7 @@ impl OIDCConfig {
             issuer_url,
             redirect,
             post_login: None,
+            session: SessionConfig::from_env(),
         })
     }
 }
@@ -579,6 +668,7 @@ pub async fn setup(
 /// - `access_token`: The signed JSON Web Token received after login.
 /// - `issuer`: The issuer URL (e.g., `http://localhost:8442`).
 /// - `algorithm`: The signing algorithm (e.g., `RS256`).
+/// - `expiration`: An optional expiration specification, if none provided this method uses 1 hour
 ///
 /// Returns `Ok(Redirect)` on success, or an error if JSON serialization fails.
 pub fn login(
@@ -587,11 +677,20 @@ pub fn login(
     access_token: String,
     issuer: &str,
     algorithm: &str,
-) -> Result<Redirect, crate::Error> {
+    expiration: Option<OffsetDateTime>,
+) -> Result<Redirect, OIDCError> {
+    
+    let expires = match expiration {
+        Some(expires) => expires,
+        None => {
+            OffsetDateTime::now_utc().checked_add(Duration::new(3600, 0)).expect("failed to add 1 hour")
+        }, 
+    };
     // Add the access_token cookie
     jar.add(
         Cookie::build(("access_token", access_token))
-            .secure(false)
+            .secure(true)
+            .expires(expires)
             .http_only(true)
             .same_site(SameSite::Lax),
     );
@@ -602,7 +701,7 @@ pub fn login(
         algorithm: algorithm.to_string(),
     };
 
-    let issuer_data_json = serde_json::to_string(&issuer_data).map_err(crate::Error::JsonErr)?;
+    let issuer_data_json = serde_json::to_string(&issuer_data)?;
 
     // Add issuer_data cookie
     jar.add(

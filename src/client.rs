@@ -5,19 +5,22 @@ use openidconnect::core::*;
 use reqwest::Url;
 use serde_derive::*;
 use std::str::FromStr;
+use std::io::Read;
 
 use crate::CoreClaims;
-use crate::Error;
+use crate::errors::OIDCError;
 use crate::OIDCConfig;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use rand::RngCore;
 
 use crate::token::*;
 use serde::de::DeserializeOwned;
 use std::collections::HashSet;
 use std::path::Path;
 use tokio::{fs::File, io::AsyncReadExt};
+use crate::sign::OidcSigner;
 
 use openidconnect::reqwest;
 use openidconnect::*;
@@ -50,6 +53,13 @@ pub type OpenIDClient<
     HasUserInfoUrl,
 >;
 
+/// Generate a vector of cryptographically secure random bytes of length `len`.
+pub fn generate_random_bytes(len: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; len];
+    rand::rngs::OsRng.fill_bytes(&mut buf); // Uses the OS's secure RNG
+    buf
+}
+
 fn join_url(root: &str, route: &str) -> Result<String, url::ParseError> {
     let base = Url::parse(root)?;
     let joined = base.join(route)?;
@@ -60,13 +70,13 @@ fn trim_trailing_whitespace(s: &str) -> String {
     s.trim_end().to_string()
 }
 
-async fn laod_client_secret<P: AsRef<Path>>(
+fn load_client_secret<P: AsRef<Path>>(
     secret_file: P,
 ) -> Result<ClientSecret, std::io::Error> {
-    let mut file = File::open(secret_file.as_ref()).await?;
+    let mut file = std::fs::File::open(secret_file.as_ref())?;
     let mut contents = String::new();
 
-    file.read_to_string(&mut contents).await?;
+    file.read_to_string(&mut contents)?;
     let secret = trim_trailing_whitespace(&contents);
     #[cfg(debug_assertions)]
     println!("using secret: {}", secret);
@@ -74,22 +84,88 @@ async fn laod_client_secret<P: AsRef<Path>>(
 }
 
 fn hashset_from<T: std::cmp::Eq + std::hash::Hash>(vals: Vec<T>) -> HashSet<T> {
-    let mut set = HashSet::new();
-    for val in vals.into_iter() {
-        set.insert(val);
+    vals.into_iter().collect()
+}
+
+/// Configuration for session token creation and validation.
+/// Used to sign and verify session JWTs.
+#[derive(Debug, Clone)]
+pub struct WorkingSessionConfig {
+    signing_key: OidcSigner,
+    pub issuer_url: String,
+    /// Expiration time for session tokens in seconds.
+    pub expiration_seconds: u64,
+    /// a base64 encoded encryption key for session tokens.
+    session_enc_key: String,
+}
+
+impl WorkingSessionConfig {
+
+    /// Creates a new `SessionConfig` from a signing key and issuer URL.
+    ///
+    /// # Arguments
+    /// * `signing_key` - The OIDC signer used to sign session tokens.
+    /// * `issuer_url` - The issuer URL for the session tokens.
+    /// * `expiration_seconds` - Expiration time for session tokens in seconds.
+    /// * `session_enc_key` - A base64 encoded encryption key for session tokens.
+    pub fn new_with_key(
+        signing_key: OidcSigner,
+        issuer_url: String,
+        expiration_seconds: u64,
+        session_enc_key: String,
+    ) -> Self {
+        Self {
+            signing_key,
+            issuer_url,
+            expiration_seconds,
+            session_enc_key,
+        }
     }
-    set
+
+    /// Creates a new [`WorkingSessionConfig`] from signing key, and issuer_url
+    /// 
+    /// # Arguments
+    /// * `signing_key` - The OIDC signer used to sign session tokens.
+    /// * `issuer_url` - The issuer URL for the session tokens.
+    /// * `expiration_seconds` - Expiration time for session tokens in seconds.
+    /// 
+    /// Internally this function calls [`WorkingSessionConfig::new_with_key`] passing in a randomly generated base64 encoded 32 byte array
+    pub fn new(signing_key: OidcSigner, issuer_url: String, expiration_seconds: u64) -> Self {
+        let session_enc_key = base64::encode(generate_random_bytes(32));
+        Self::new_with_key(signing_key, issuer_url, expiration_seconds, session_enc_key)
+    }
+
+    /// Returns a reference to the signing key.
+    pub fn signing_key(&self) -> &OidcSigner {
+        &self.signing_key
+    }
 }
 
 /// Configuration used internally by the OIDC client to manage static values.
 ///
 /// Contains client credentials and metadata loaded from a higher-level `OIDCConfig`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct WorkingConfig {
     client_secret: ClientSecret,
     client_id: ClientId,
     issuer_url: IssuerUrl,
     redirect: String,
+    session_config: Option<WorkingSessionConfig>,
+    post_login: Option<String>,
+}
+
+impl TryFrom<&OIDCConfig> for WorkingConfig {
+    type Error = OIDCError;
+    fn try_from(config: &OIDCConfig) -> Result<WorkingConfig, Self::Error> {
+        WorkingConfig::from_oidc_config(&config)
+    }
+}
+
+impl TryFrom<OIDCConfig> for WorkingConfig {
+    type Error = OIDCError;
+    fn try_from(config: OIDCConfig) -> Result<WorkingConfig, Self::Error> {
+        (&config).try_into()
+    }
 }
 
 impl WorkingConfig {
@@ -103,20 +179,64 @@ impl WorkingConfig {
     /// # Returns
     /// * `Ok(WorkingConfig)` on success.
     /// * `Err` if loading or parsing fails.
-    pub async fn from_oidc_config(config: &OIDCConfig) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_oidc_config(config: &OIDCConfig) -> Result<Self, OIDCError> {
         let client_id = config.client_id.clone();
         let issuer_url = config.issuer_url.clone();
 
         let client_id = ClientId::new(client_id);
-        let client_secret = laod_client_secret(&config.client_secret).await?;
+        let client_secret = load_client_secret(&config.client_secret)?;
         let issuer_url = IssuerUrl::new(issuer_url)?;
+
+        let session_config = if let Some(session) = &config.session {
+            let signer = OidcSigner::from_config_path(&session.signing_key_path, "session-key")?;
+            let iss = session.issuer_url.clone();
+            let session_expiration_seconds = session.expiration_seconds.unwrap_or(3600);
+            Some(WorkingSessionConfig::new(
+                signer,
+                iss,
+                session_expiration_seconds,
+            ))
+        } else {
+            None
+        };
 
         Ok(Self {
             client_id,
             client_secret,
             issuer_url,
             redirect: config.redirect.clone(),
+            session_config,
+            post_login: config.post_login.clone(),
         })
+    }
+
+    pub fn session_config(&self) -> &Option<WorkingSessionConfig> {
+        &self.session_config
+    }
+
+    pub fn session_provider(&self) -> Option<Validator> {
+        if let Some(session) = &self.session_config {
+            let keyid = KeyID::new(&session.issuer_url, "RS256");
+            let decoding_key = session.signing_key.decoding_key();
+            let mut validation = Validation::new(Algorithm::RS256);
+            validation.validate_exp = true;
+            validation.validate_aud = false;
+            validation.validate_nbf = true;
+            validation.leeway = 100;
+            validation.iss = Some(hashset_from(vec![session.issuer_url.to_string()]));
+            let mut validator = Validator::with_session(session.clone());
+            validator.insert_endpoint(keyid, Endpoint::new(validation, decoding_key));
+            Some(validator)
+        } else {
+            None
+        }
+    }
+
+    pub fn post_login(&self) -> &str {
+        match &self.post_login {
+            Some(url) => &url,
+            None => "/",
+        }
     }
 }
 
@@ -181,13 +301,14 @@ pub struct Validator {
     // Default issuer URL, used by legacy or simplified decoding methods.
     // Note: this may not always be correct if your validator handles multiple issuers.
     default_iss: String,
+    session: Option<WorkingSessionConfig>,
 }
 
 fn parse_jwks(
     issuer: &str,
     jwks_json: &str,
     mut validation: Validation,
-) -> Result<HashMap<KeyID, Endpoint>, Box<dyn std::error::Error>> {
+) -> Result<HashMap<KeyID, Endpoint>, OIDCError> {
     let jwks: Value = serde_json::from_str(jwks_json)?;
     let keys_array = jwks["keys"]
         .as_array()
@@ -232,6 +353,14 @@ fn parse_jwks(
 }
 
 impl Validator {
+    /// creates an empty [`Validator`] with the given session config.
+    pub fn with_session(session: WorkingSessionConfig) -> Self {
+        Self {
+            pubkeys: HashMap::new(),
+            default_iss: session.issuer_url.clone(),
+            session: Some(session),
+        }
+    }
     /// Creates a new `Validator` from a single public key.
     ///
     /// This is useful when you already have a known key (for example, configured statically)
@@ -246,7 +375,7 @@ impl Validator {
         audiance: String,
         algorithm: String,
         public_key: DecodingKey,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, OIDCError> {
         let pubkeys = HashMap::new();
         let algo = Algorithm::from_str(&algorithm)?;
         //let validation = Validation::new(algo);
@@ -254,6 +383,7 @@ impl Validator {
         let mut validator = Self {
             pubkeys,
             default_iss: url.clone(),
+            session: None,
         };
 
         validator.insert_pubkey(url, audiance, algorithm, public_key)?;
@@ -269,14 +399,13 @@ impl Validator {
     /// * `audiance` - Expected audience claim.
     /// * `algorithm` - Signing algorithm (e.g., "RS256").
     /// * `pem` - RSA public key in PEM format.
-    pub fn from_rsa_pem(
+    pub fn from_rsa_pubkey_pem(
         url: String,
         audiance: String,
         algorithm: String,
         pem: &str,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let decoding_key = DecodingKey::from_rsa_pem(pem.as_bytes())
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+    ) -> Result<Self, OIDCError> {
+        let decoding_key = DecodingKey::from_rsa_pem(pem.as_bytes())?;
         Self::from_pubkey(url, audiance, algorithm, decoding_key)
     }
 
@@ -301,6 +430,7 @@ impl Validator {
         Self {
             pubkeys: HashMap::new(),
             default_iss: "".to_string(),
+            session: None,
         }
     }
 
@@ -315,22 +445,41 @@ impl Validator {
         validation: Validation,
         provider_metadata: &CoreProviderMetadata,
         issuer_url: String,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+        session: Option<WorkingSessionConfig>,
+    ) -> Result<Self, OIDCError> {
         let jwks_uri = provider_metadata.jwks_uri().to_string();
 
         let jwks_json = reqwest::get(jwks_uri).await?.text().await?;
         let keys = parse_jwks(&issuer_url, &jwks_json, validation.clone())?;
-        Ok(Self {
-            pubkeys: keys,
+        let mut validator = Self {
+            pubkeys: HashMap::new(),
             default_iss: issuer_url,
-        })
+            session,
+        };
+        for (key, value) in keys.into_iter() {
+            validator.pubkeys.insert(key, value);
+        }
+        if let Some(session) = &validator.session {
+            let keyid = KeyID::new(&session.issuer_url, "RS256");
+            let decoding_key = session.signing_key.decoding_key();
+            let mut session_validation = Validation::new(Algorithm::RS256);
+            session_validation.validate_exp = true;
+            session_validation.validate_aud = false;
+            session_validation.validate_nbf = true;
+            session_validation.leeway = 100;
+            session_validation.iss = Some(hashset_from(vec![session.issuer_url.to_string()]));
+            validator
+                .pubkeys
+                .insert(keyid, Endpoint::new(session_validation, decoding_key));
+        }
+        Ok(validator)
     }
 
     fn default_validation(
         url: &str,
         audiance: &str,
         algorithm: &str,
-    ) -> Result<Validation, Box<dyn std::error::Error>> {
+    ) -> Result<Validation, OIDCError> {
         let algo = Algorithm::from_str(&algorithm)?;
         let mut validation = Validation::new(algo);
         //validation.insecure_disable_signature_validation();
@@ -362,7 +511,7 @@ impl Validator {
     /// - `validation`: The validation params used for this endpoint (make sure iss, aud, alg are set correctly)
     /// # Returns
     /// - `Ok(())` if the keys were successfully fetched and added.
-    /// - `Err(Box<dyn std::error::Error>)` if any network, parsing, or validation step fails.
+    /// - `Err(OIDCError)` if any network, parsing, or validation step fails.
     ///
     /// # Errors
     /// Returns an error if:
@@ -385,25 +534,17 @@ impl Validator {
         issuer_url: &str,
         audiance: &str,
         default_algorithm: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let http_client = match reqwest::ClientBuilder::new()
+    ) -> Result<(), OIDCError> {
+        let http_client = reqwest::ClientBuilder::new()
             // Following redirects opens the client up to SSRF vulnerabilities.
             .redirect(reqwest::redirect::Policy::none())
-            .build()
-        {
-            Ok(client) => client,
-            Err(e) => return Err(Box::new(e)),
-        };
+            .build()?;
 
-        let provider_metadata = match CoreProviderMetadata::discover_async(
+        let provider_metadata = CoreProviderMetadata::discover_async(
             IssuerUrl::new(issuer_url.to_string())?,
             &http_client,
         )
-        .await
-        {
-            Ok(provider_metadata) => provider_metadata,
-            Err(e) => return Err(Box::new(e)),
-        };
+        .await?;
         let validation = Self::default_validation(issuer_url, audiance, default_algorithm)?;
 
         let jwks_uri = provider_metadata.jwks_uri().to_string();
@@ -437,7 +578,7 @@ impl Validator {
         issuer_url: &str,
         jwks_json: &str,
         validation: Validation,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), OIDCError> {
         // Parse the keys, associating them with the issuer and current validation config
         let keys = parse_jwks(issuer_url, jwks_json, validation.clone())?;
 
@@ -468,7 +609,7 @@ impl Validator {
         audiance: String,
         algorithm: String,
         public_key: DecodingKey,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), OIDCError> {
         let algo = Algorithm::from_str(&algorithm)?;
         let validation = Self::default_validation(&url, &audiance, &algorithm)?;
 
@@ -492,7 +633,7 @@ impl Validator {
         issuer: &str,
         algorithm: &str,
         access_token: &str,
-    ) -> Result<TokenData<T>, crate::Error> {
+    ) -> Result<TokenData<T>, OIDCError> {
         let keyid = KeyID::new(issuer, algorithm);
         if let Some(endpoint) = self.pubkeys.get(&keyid) {
             #[cfg(debug_assertions)]
@@ -520,7 +661,7 @@ impl Validator {
                 &endpoint.validation,
             )?)
         } else {
-            Err(Error::PubKeyNotFound(keyid))
+            Err(OIDCError::PubKeyNotFound(keyid))
         }
     }
 
@@ -533,7 +674,7 @@ impl Validator {
     >(
         &self,
         access_token: &str,
-    ) -> Result<TokenData<T>, crate::Error> {
+    ) -> Result<TokenData<T>, OIDCError> {
         self.decode_with_iss_alg::<T>(&self.default_iss, "RS256", access_token)
     }
 }
@@ -587,25 +728,17 @@ impl OIDCClient {
     /// or if the HTTP client cannot be built.
     pub async fn from_oidc_config(
         config: &OIDCConfig,
-    ) -> Result<(Self, Validator), Box<dyn std::error::Error>> {
-        let config = WorkingConfig::from_oidc_config(config).await?;
+    ) -> Result<(Self, Validator), OIDCError> {
+        let config = WorkingConfig::from_oidc_config(config)?;
 
-        let http_client = match reqwest::ClientBuilder::new()
+        let http_client = reqwest::ClientBuilder::new()
             // Following redirects opens the client up to SSRF vulnerabilities.
             .redirect(reqwest::redirect::Policy::none())
-            .build()
-        {
-            Ok(client) => client,
-            Err(e) => return Err(Box::new(e)),
-        };
+            .build()?;
 
         let provider_metadata =
-            match CoreProviderMetadata::discover_async(config.issuer_url.clone(), &http_client)
-                .await
-            {
-                Ok(provider_metadata) => provider_metadata,
-                Err(e) => return Err(Box::new(e)),
-            };
+            CoreProviderMetadata::discover_async(config.issuer_url.clone(), &http_client)
+                .await?;
 
         // Decode and verify the JWT
         let mut validation = Validation::new(Algorithm::RS256);
@@ -619,10 +752,17 @@ impl OIDCClient {
             validation.iss = Some(hashset_from(vec![config.issuer_url.to_string()])); // Validate the issuer
         };
 
+        let session = if let Some(session) = &config.session_config {
+            Some(session.clone())
+        } else {
+            None
+        };
+
         let validator = Validator::new(
             validation,
             &provider_metadata,
             config.issuer_url.to_string(),
+            session,
         )
         .await?;
 
@@ -693,7 +833,7 @@ impl OIDCClient {
     pub async fn exchange_code(
         &self,
         code: AuthorizationCode,
-    ) -> Result<CoreTokenResponse, crate::Error> {
+    ) -> Result<CoreTokenResponse, crate::errors::OIDCError> {
         Ok(self
             .client
             .exchange_code(code)?
@@ -739,8 +879,8 @@ impl OIDCClient {
     pub async fn from_oidc_config_with_validation(
         config: &OIDCConfig,
         custom_validation: Validation,
-    ) -> Result<(Self, Validator), Box<dyn std::error::Error>> {
-        let config = WorkingConfig::from_oidc_config(config).await?;
+    ) -> Result<(Self, Validator), OIDCError> {
+        let config = WorkingConfig::from_oidc_config(config)?;
         let http_client = reqwest::ClientBuilder::new()
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
@@ -752,6 +892,7 @@ impl OIDCClient {
             custom_validation,
             &provider_metadata,
             config.issuer_url.to_string(),
+            config.session_config.clone()
         )
         .await?;
 

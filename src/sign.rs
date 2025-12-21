@@ -65,9 +65,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// - `key`: The jsonwebtoken::EncodingKey used to sign tokens.
 /// - `kid`: Key ID emitted in the JWT header.
 /// - `algorithm`: The signing algorithm (e.g., RS256).
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct OidcSigner {
-    pub key: EncodingKey,
+    key: EncodingKey,
+    pem: String,
     pub kid: String,
     pub algorithm: Algorithm,
 }
@@ -78,7 +79,22 @@ impl OidcSigner {
             key: EncodingKey::from_rsa_pem(pem.as_bytes())?,
             kid: kid.into(),
             algorithm: Algorithm::RS256,
+            pem: pem.to_string(),
         })
+    }
+
+    pub fn from_config_path(
+        pem_path: &std::path::Path,
+        kid: impl Into<String>,
+    ) -> Result<Self, OIDCError> {
+        let pem = std::fs::read_to_string(pem_path)?;
+        Ok(Self::from_rsa_pem(&pem, kid)?)
+    }
+
+    pub fn decoding_key(&self) -> jsonwebtoken::DecodingKey {
+        
+        jsonwebtoken::DecodingKey::from_rsa_pem(self.pem.as_bytes())
+            .expect("failed to create decoding key")
     }
 
     /// Constructs an `OidcSigner` from an X.509 / PKCS#8 PEM-encoded private key.
@@ -107,6 +123,7 @@ impl OidcSigner {
             key,
             kid: kid.into(),
             algorithm: Algorithm::RS256,
+            pem: pem.to_string(),
         })
     }
 
@@ -207,6 +224,8 @@ use rsa::{
     RsaPrivateKey,
     pkcs8::{EncodePrivateKey, EncodePublicKey},
 };
+
+use crate::errors::OIDCError;
 
 pub fn generate_rsa_pkcs8_pair() -> (String, String) {
     // Generate a 2048-bit RSA private key
