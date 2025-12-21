@@ -328,12 +328,12 @@ impl CoreClaims for BaseClaims {
         &self.sub
     }
 
-    fn issuer(&self) -> &[String] {
-        &self.iss
+    fn issuer(&self) -> Vec<String> {
+        self.iss.clone()
     }
 
-    fn audience(&self) -> &[String] {
-        &self.aud
+    fn audience(&self) -> Vec<String> {
+        self.aud.clone()
     }
 
     fn issued_at(&self) -> i64 {
@@ -349,8 +349,8 @@ impl CoreClaims for BaseClaims {
 /// this is also used as a marker trait
 pub trait CoreClaims: Clone {
     fn subject(&self) -> &str;
-    fn issuer(&self) -> &[String];
-    fn audience(&self) -> &[String];
+    fn issuer(&self) -> Vec<String>;
+    fn audience(&self) -> Vec<String>;
     fn issued_at(&self) -> i64;
     fn expiration(&self) -> i64 {
         3600 // default to 1 hour``   
@@ -365,28 +365,22 @@ impl CoreClaims for Value {
             .unwrap_or("")
     }
 
-    fn issuer(&self) -> &[String] {
-        if cfg!(debug_assertions) {
-            panic!("not intended for release builds, this has a memory leak by design")
-        }
-        unsafe {
+    fn issuer(&self) -> Vec<String> {
+        
             match self.get("iss") {
                 Some(val) => value_to_str_slice(val),
-                None => &[],
+                None => Vec::new(),
             }
-        }
+        
     }
 
-    fn audience(&self) -> &[String] {
-        if cfg!(debug_assertions) {
-            panic!("not intended for release builds, this has a memory leak by design")
-        }
-        unsafe {
+    fn audience(&self) -> Vec<String> {
+        
             match self.get("aud") {
                 Some(val) => value_to_str_slice(val),
-                None => &[],
+                None => Vec::new(),
             }
-        }
+        
     }
 
     fn issued_at(&self) -> i64 {

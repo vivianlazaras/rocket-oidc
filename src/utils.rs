@@ -32,12 +32,12 @@ where
 
 
 /// this function intentionally leaks memory.
-pub unsafe fn value_to_str_slice(value: &Value) -> &[String] {
+pub fn value_to_str_slice(value: &Value) -> Vec<String> {
     // static empty slice for fallback
     static EMPTY_SLICE: &[String] = &[];
 
     match value {
-        Value::String(s) => std::slice::from_ref(s),
+        Value::String(s) => vec![s.to_string()],
         Value::Array(arr) => {
             // collect &str references from array
             // store in a temporary Vec, then leak it for 'static lifetime
@@ -48,12 +48,12 @@ pub unsafe fn value_to_str_slice(value: &Value) -> &[String] {
                 temp.push(v.to_string());
             }
             if temp.is_empty() {
-                EMPTY_SLICE
+                EMPTY_SLICE.to_vec()
             } else {
-                temp.leak()
+                temp
             }
         }
-        _ => EMPTY_SLICE,
+        _ => EMPTY_SLICE.to_vec(),
     }
 }
 
