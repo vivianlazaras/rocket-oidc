@@ -162,7 +162,7 @@ mod tests {
         let issuer = "http://test-issuer.local";
         
         let signer = OidcSigner::from_rsa_pem(&privkey, "RS256").expect("create signer");
-        let validator = Validator::from_rsa_pem(issuer.to_string(), "test".to_string(), "RS256".to_string(), &pubkey).expect("create validator");
+        let validator = Validator::from_rsa_pubkey_pem(issuer.to_string(), "test".to_string(), "RS256".to_string(), &pubkey).expect("create validator");
         (signer, validator, issuer.to_string())
     }
 

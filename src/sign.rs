@@ -266,7 +266,7 @@ pub(crate) mod tests {
                 json!({ "sub": "user-123", "role": "admin", "iss": "http://localhost:8080", "aud": "test-audience" }),
             )
             .unwrap();
-        let validator = Validator::from_rsa_pem(
+        let validator = Validator::from_rsa_pubkey_pem(
             "http://localhost:8080".to_string(),
             "test-audience".to_string(),
             "RS256".to_string(),
