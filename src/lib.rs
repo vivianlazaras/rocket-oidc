@@ -139,6 +139,8 @@ use crate::client::{IssuerData, KeyID};
 use client::{OIDCClient, Validator};
 use rocket::http::Cookie;
 use rocket::response::Redirect;
+use std::collections::HashSet;
+use serde_json::Value;
 use rocket::{
     Build, Request, Rocket,
     http::Status,
@@ -313,9 +315,9 @@ where
 struct BaseClaims {
     exp: i64,
     sub: String,
-    iss: String,
+    iss: HashSet<String>,
     alg: String,
-    aud: String,
+    aud: HashSet<String>,
     iat: i64,
 }
 
@@ -324,12 +326,12 @@ impl CoreClaims for BaseClaims {
         &self.sub
     }
 
-    fn issuer(&self) -> &str {
-        &self.iss
+    fn issuer(&self) -> HashSet<String> {
+        self.iss.clone()
     }
 
-    fn audience(&self) -> &str {
-        &self.aud
+    fn audience(&self) -> HashSet<String> {
+        self.aud.clone()
     }
 
     fn issued_at(&self) -> i64 {
@@ -345,29 +347,41 @@ impl CoreClaims for BaseClaims {
 /// this is also used as a marker trait
 pub trait CoreClaims: Clone {
     fn subject(&self) -> &str;
-    fn issuer(&self) -> &str;
-    fn audience(&self) -> &str;
+    fn issuer(&self) -> HashSet<String>;
+    fn audience(&self) -> HashSet<String>;
     fn issued_at(&self) -> i64;
     fn expiration(&self) -> i64 {
         3600 // default to 1 hour``   
     }
 }
 
-impl CoreClaims for serde_json::Value {
+impl CoreClaims for Value {
     fn subject(&self) -> &str {
-        self.get("sub").and_then(|v| v.as_str()).unwrap_or_default()
+        self.get("sub")
+            .and_then(Value::as_str)
+            .unwrap_or("")
     }
 
-    fn issuer(&self) -> &str {
-        self.get("iss").and_then(|v| v.as_str()).unwrap_or_default()
+    fn issuer(&self) -> HashSet<String> {
+        // RFC: iss is a single string
+        string_or_array_to_set(self.get("iss"))
     }
 
-    fn audience(&self) -> &str {
-        self.get("aud").and_then(|v| v.as_str()).unwrap_or_default()
+    fn audience(&self) -> HashSet<String> {
+        // RFC: aud is string OR array
+        string_or_array_to_set(self.get("aud"))
     }
 
     fn issued_at(&self) -> i64 {
-        self.get("iat").and_then(|v| v.as_i64()).unwrap_or_default()
+        self.get("iat")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+    }
+
+    fn expiration(&self) -> i64 {
+        self.get("exp")
+            .and_then(Value::as_i64)
+            .unwrap_or(3600)
     }
 }
 

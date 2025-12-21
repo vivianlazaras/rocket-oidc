@@ -2,12 +2,36 @@
 use cookie::Expiration;
 use rocket::http::Cookie;
 use time::OffsetDateTime;
-use std::collections::HashSet;
 use rsa::{RsaPrivateKey, RsaPublicKey};
 use rsa::pkcs8::{DecodePrivateKey, EncodePublicKey};
 use jsonwebtoken::DecodingKey;
 use crate::errors::OIDCError;
 use rsa::pkcs1::DecodeRsaPrivateKey;
+
+use std::collections::HashSet;
+use serde_json::Value;
+
+pub fn string_or_array_to_set(value: Option<&Value>) -> HashSet<String> {
+    let mut set = HashSet::new();
+
+    match value {
+        Some(Value::String(s)) => {
+            set.insert(s.clone());
+        }
+        Some(Value::Array(arr)) => {
+            for v in arr {
+                if let Some(s) = v.as_str() {
+                    set.insert(s.to_owned());
+                }
+            }
+        }
+        _ => {}
+    }
+
+    set
+}
+
+
 
 /// Load an RSA private key (PKCS#1 or PKCS#8 PEM),
 /// extract the public key, and build a DecodingKey from it.
