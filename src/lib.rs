@@ -242,18 +242,18 @@ impl AuthState {
             let claims = self
                 .validator
                 .decode_with_iss_alg::<BaseClaims>(
-                    token.access_token().secret(),
                     &iss,
                     &chosen_alg,
+                    token.access_token().secret(),
                 )?;
             sign_session_token(&claims.claims, session)?
         }else{
             let claims = self
                 .validator
                 .decode_with_iss_alg::<BaseClaims>(
-                    token.access_token().secret(),
                     &iss,
                     &chosen_alg,
+                    token.access_token().secret()
                 )?;
             (token.access_token().secret().to_string(), OffsetDateTime::from_unix_timestamp(claims.claims.exp)?)
         };
