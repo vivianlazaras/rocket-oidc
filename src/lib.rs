@@ -140,7 +140,7 @@ use client::{OIDCClient, Validator};
 use rocket::http::Cookie;
 use rocket::response::Redirect;
 use std::collections::HashSet;
-use serde_json::Value;
+use serde_json::{Value, Map, Number};
 use rocket::{
     Build, Request, Rocket,
     http::Status,
@@ -159,13 +159,31 @@ use rocket::http::CookieJar;
 use rocket::http::SameSite;
 use serde::{Deserialize, Serialize};
 
+/// Sets an i64 value on a serde_json::Value object by key.
+/// If the Value is not already an object, it will be replaced with an empty object first.
+pub fn set_i64(value: &mut Value, key: &str, val: i64) {
+    // Ensure the Value is an object
+    if !value.is_object() {
+        *value = Value::Object(Map::new());
+    }
+
+    if let Value::Object(map) = value {
+        map.insert(key.to_string(), Value::Number(val.into()));
+        
+    }
+}
+
+pub fn get_i64(value: &Value, key: &str) -> Result<i64, OIDCError> {
+    Ok(value.get("exp").map(|v| v.as_i64()).flatten().ok_or(OIDCError::MissingClaims("exp".to_string()))?)
+}
+
 pub(crate) fn sign_session_token(
-    claims: &BaseClaims,
+    claims: &Value,
     session: &WorkingSessionConfig,
 ) -> Result<(String, OffsetDateTime), OIDCError> {
     let mut new_claims = claims.clone();
     let new_exp = OffsetDateTime::now_utc() + Duration::seconds(session.expiration_seconds as i64);
-    new_claims.exp = new_exp.unix_timestamp();
+    set_i64(&mut new_claims, "exp", new_exp.unix_timestamp());
     let token = session.signing_key().sign(&new_claims)?;
     Ok((token, new_exp))
 }
@@ -215,9 +233,9 @@ impl AuthState {
             None => {
                 let token_data = self
                     .validator
-                    .decode::<BaseClaims>(token.access_token().secret())?;
+                    .decode::<Value>(token.access_token().secret())?;
 
-                OffsetDateTime::from_unix_timestamp(token_data.claims.exp as i64)
+                OffsetDateTime::from_unix_timestamp(get_i64(&token_data.claims, "exp")?)
                     .unwrap_or_else(|_| OffsetDateTime::now_utc())
             }
         };
@@ -241,21 +259,21 @@ impl AuthState {
         let (token, exp) = if let Some(session) = self.config.session_config() {
             // decode the original access token claims
             // forgot this was the old token, not the new one, so use old issuer
-            let claims = self.validator.decode_with_iss_alg::<BaseClaims>(
+            let claims = self.validator.decode_with_iss_alg::<Value>(
                 &issuer,
                 &chosen_alg,
                 token.access_token().secret(),
             )?;
             sign_session_token(&claims.claims, session)?
         } else {
-            let claims = self.validator.decode_with_iss_alg::<BaseClaims>(
+            let claims = self.validator.decode_with_iss_alg::<Value>(
                 &issuer,
                 &chosen_alg,
                 token.access_token().secret(),
             )?;
             (
                 token.access_token().secret().to_string(),
-                OffsetDateTime::from_unix_timestamp(claims.claims.exp)?,
+                OffsetDateTime::from_unix_timestamp(get_i64(&claims.claims, "exp")?)?,
             )
         };
 
