@@ -15,7 +15,7 @@ openidconnect = "4.0.0"
 pkcs8 = "0.10.2"
 rand = "0.8"
 reqwest = { version = "0.12.15", default-features = false, features = ["rustls-tls", "json"]}
-rocket = "0.5.1"
+rocket = {version = "0.5.1", features = ["secrets"]}
 rpassword = "7.4.0"
 rsa = { version = "0.9.8", features = ["pem"] }
 serde = "1.0.219"
