@@ -450,7 +450,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
         let cookies = req.cookies();
         let auth = req.rocket().state::<AuthState>().unwrap().clone();
 
-        if let Some(access_token) = cookies.get("access_token") {
+        if let Some(access_token) = cookies.get_private("access_token") {
             let token_result = if let Some(issuer_cookie) = cookies.get("issuer_data") {
                 // Parse issuer_data JSON
                 match serde_json::from_str::<IssuerData>(issuer_cookie.value()) {
@@ -699,9 +699,9 @@ pub fn login(
             .expect("failed to add 1 hour"),
     };
     // Add the access_token cookie
-    jar.add(
+    jar.add_private(
         Cookie::build(("access_token", access_token))
-            .secure(true)
+            .secure(false)
             .expires(expires)
             .http_only(true)
             .same_site(SameSite::Lax),
@@ -716,7 +716,7 @@ pub fn login(
     let issuer_data_json = serde_json::to_string(&issuer_data)?;
 
     // Add issuer_data cookie
-    jar.add(
+    jar.add_private(
         Cookie::build(("issuer_data", issuer_data_json))
             .secure(false)
             .http_only(false) // if you don't want JS access, set to true

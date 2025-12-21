@@ -307,8 +307,8 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
             .expect("validator managed state not found")
             .clone();
 
-        if let Some(access_token) = cookies.get("access_token") {
-            if let Some(issuer_cookie) = cookies.get("issuer_data") {
+        if let Some(access_token) = cookies.get_private("access_token") {
+            if let Some(issuer_cookie) = cookies.get_private("issuer_data") {
                 // Parse JSON into IssuerData
                 match serde_json::from_str::<IssuerData>(issuer_cookie.value()) {
                     Ok(issuer_data) => {
