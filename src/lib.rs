@@ -317,7 +317,6 @@ struct BaseClaims {
     sub: String,
     #[serde(deserialize_with = "string_or_vec")]
     iss: Vec<String>,
-    alg: String,
     #[serde(deserialize_with = "string_or_vec")]
     aud: Vec<String>,
     iat: i64,
