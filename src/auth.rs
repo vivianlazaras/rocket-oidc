@@ -9,7 +9,7 @@ use rocket::request::{FromRequest, Outcome};
 use serde::{Serialize, de::DeserializeOwned};
 use std::fmt::Debug;
 
-use crate::client::{Validator};
+use crate::client::Validator;
 
 #[derive(Debug, Clone)]
 pub struct AuthGuard<T: Serialize + DeserializeOwned + Debug> {
@@ -57,7 +57,10 @@ fn alg_to_string(alg: &jsonwebtoken::Algorithm) -> String {
 fn get_iss_alg(token: &str) -> Option<IDClaims> {
     let alg = match jsonwebtoken::decode_header(token) {
         Ok(header) => alg_to_string(&header.alg),
-        Err(e) => { eprintln!("error decoding algorithim: {}", e); return None },
+        Err(e) => {
+            eprintln!("error decoding algorithim: {}", e);
+            return None;
+        }
     };
     let claims: serde_json::Value = match jsonwebtoken::dangerous::insecure_decode(token) {
         Ok(data) => data.claims,
@@ -76,7 +79,12 @@ fn extract_key_from_authorization_header(header: &str) -> Option<String> {
     }
 }
 
-fn parse_authorization_header<T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims>(header: &str, validator: &Validator) -> Outcome<ApiKeyGuard<T>, ()> {
+fn parse_authorization_header<
+    T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims,
+>(
+    header: &str,
+    validator: &Validator,
+) -> Outcome<ApiKeyGuard<T>, ()> {
     let api_key = match extract_key_from_authorization_header(header) {
         Some(key) => key,
         None => {
@@ -89,11 +97,14 @@ fn parse_authorization_header<T: Serialize + Debug + DeserializeOwned + std::mar
         Some(claims) => claims,
         None => {
             eprintln!("Failed to decode token to get iss/alg");
-            return Outcome::Forward(Status::Unauthorized)
-        },
+            return Outcome::Forward(Status::Unauthorized);
+        }
     };
 
-    println!("Validating token with iss: {}, alg: {}", idclaims.iss, idclaims.alg);
+    println!(
+        "Validating token with iss: {}, alg: {}",
+        idclaims.iss, idclaims.alg
+    );
     match validator.decode_with_iss_alg::<T>(&idclaims.iss, &idclaims.alg, &api_key) {
         Ok(data) => {
             return Outcome::Success(ApiKeyGuard {
@@ -111,10 +122,10 @@ fn parse_authorization_header<T: Serialize + Debug + DeserializeOwned + std::mar
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
     use crate::sign::OidcSigner;
-    use serde_derive::{Deserialize};
-    
+    use serde_derive::Deserialize;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     fn iat_to_exp() -> (i64, i64) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -160,9 +171,15 @@ mod tests {
     fn make_signer_and_validator() -> (OidcSigner, Validator, String) {
         let (privkey, pubkey) = crate::sign::generate_rsa_pkcs8_pair();
         let issuer = "http://test-issuer.local";
-        
+
         let signer = OidcSigner::from_rsa_pem(&privkey, "RS256").expect("create signer");
-        let validator = Validator::from_rsa_pubkey_pem(issuer.to_string(), "test".to_string(), "RS256".to_string(), &pubkey).expect("create validator");
+        let validator = Validator::from_rsa_pubkey_pem(
+            issuer.to_string(),
+            "test".to_string(),
+            "RS256".to_string(),
+            &pubkey,
+        )
+        .expect("create validator");
         (signer, validator, issuer.to_string())
     }
 
@@ -234,18 +251,20 @@ mod tests {
 
         // create a different signer (different issuer/alg) to produce a token that will not validate
         let (signer_b, _validator_b, issuer_b) = make_signer_and_validator();
-        let token = signer_b.sign(&TestClaims {
-            aud: "test".to_string(),
-            iat,
-            sub: "userX".to_string(),
-            iss: issuer_b,
-            exp,
-        }).expect("sign token b");
+        let token = signer_b
+            .sign(&TestClaims {
+                aud: "test".to_string(),
+                iat,
+                sub: "userX".to_string(),
+                iss: issuer_b,
+                exp,
+            })
+            .expect("sign token b");
 
         let header = format!("Bearer {}", token);
 
         // try to validate with signer_a's validator (should fail due to issuer/key mismatch)
-        
+
         let outcome = crate::auth::parse_authorization_header::<TestClaims>(&header, &validator_a);
 
         match outcome {

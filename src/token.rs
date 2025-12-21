@@ -1,10 +1,10 @@
+use crate::CoreClaims;
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
-use tokio::sync::RwLock;
-use std::sync::Arc;
 use std::fmt::Debug;
-use crate::CoreClaims;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// token provider information.
 pub trait TokenProvider: Clone + Debug {
@@ -35,7 +35,7 @@ impl<P: TokenProvider> SessionBearer<P> {
         audience: &str,
     ) -> Result<String, reqwest::Error> {
         let subject_token = claims.subject();
-        
+
         let cache_key = format!("{}::{}", subject_token, audience);
 
         // Fast path: cache hit
@@ -44,7 +44,9 @@ impl<P: TokenProvider> SessionBearer<P> {
         }
 
         // Client secret is required for this flow
-        let client_secret = self.provider.client_secret()
+        let client_secret = self
+            .provider
+            .client_secret()
             .expect("client_secret required for token exchange");
 
         let response = perform_token_exchange(
@@ -66,7 +68,6 @@ impl<P: TokenProvider> SessionBearer<P> {
 
         Ok(access_token)
     }
-
 }
 
 #[derive(Deserialize, Debug)]

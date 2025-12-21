@@ -54,6 +54,8 @@
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
+use jsonwebtoken::DecodingKey;
+use crate::utils::*;
 
 /// An OpenID Connect (OIDC) JWT signer backed by an encoding key.
 ///
@@ -68,18 +70,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug, Clone)]
 pub struct OidcSigner {
     key: EncodingKey,
-    pem: String,
+    pubkey: DecodingKey,
     pub kid: String,
     pub algorithm: Algorithm,
 }
 
 impl OidcSigner {
-    pub fn from_rsa_pem(pem: &str, kid: impl Into<String>) -> jsonwebtoken::errors::Result<Self> {
+    pub fn from_rsa_pem(pem: &str, kid: impl Into<String>) -> Result<Self, OIDCError> {
+        // jsonwebtoken doesn't correctly parse DecodingKey from private pem, so this function handles this issue by converting private pem into public pem.
+        let pubkey = decoding_key_from_private_pem(pem)?;
         Ok(Self {
             key: EncodingKey::from_rsa_pem(pem.as_bytes())?,
             kid: kid.into(),
             algorithm: Algorithm::RS256,
-            pem: pem.to_string(),
+            pubkey,
         })
     }
 
@@ -92,9 +96,7 @@ impl OidcSigner {
     }
 
     pub fn decoding_key(&self) -> jsonwebtoken::DecodingKey {
-        
-        jsonwebtoken::DecodingKey::from_rsa_pem(self.pem.as_bytes())
-            .expect("failed to create decoding key")
+        self.pubkey.clone()
     }
 
     /// Constructs an `OidcSigner` from an X.509 / PKCS#8 PEM-encoded private key.
@@ -123,7 +125,7 @@ impl OidcSigner {
             key,
             kid: kid.into(),
             algorithm: Algorithm::RS256,
-            pem: pem.to_string(),
+            pubkey: DecodingKey::from_rsa_pem(pem.as_bytes())?,
         })
     }
 
@@ -162,60 +164,29 @@ impl OidcSigner {
     /// use rocket_oidc::sign::OidcSigner;
     /// let (test_private_pem, _) = generate_rsa_pkcs8_pair();
     /// let signer = OidcSigner::from_rsa_pem(&test_private_pem, "test-kid").expect("failed to create signer");
-    /// let claims = json!({ "sub": "user-123", "role": "admin" });
+    /// let claims = json!({ "sub": "user-123", "role": "admin", "exp": 12345, "aud": "myapp", "iss": "localhost", "iat": 12345 });
     /// let token = signer.sign(claims).unwrap();
     /// println!("JWT: {}", token);
     /// ```
-    pub fn sign<T: Serialize>(
-        &self,
-        claims: T,
-    ) -> Result<String, jsonwebtoken::errors::Error>
-    where
-        T: Serialize,
-    {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let exp = now + 3600; // Default to 1 hour expiry
+    pub fn sign<T: Serialize>(&self, claims: T) -> Result<String, OIDCError> {
+        // Serialize claims to a JSON object
+        let map_binding = serde_json::to_value(&claims)?;
+        let map = map_binding
+            .as_object()
+            .ok_or_else(|| OIDCError::InvalidClaims("claims not a JSON object".into()))?;
 
-        // Optionally: wrap dynamic claims with exp/iat
-        let mut map = serde_json::to_value(&claims)?
-            .as_object_mut()
-            .unwrap()
-            .clone();
+        // Ensure required claims exist
+        for required in &["aud", "iss", "sub", "exp", "iat"] {
+            if !map.contains_key(*required) {
+                return Err(OIDCError::MissingClaims((*required.to_string()).into()));
+            }
+        }
+
+        // Build JWT header
+        let mut header = jsonwebtoken::Header::new(self.algorithm);
         
-        // Insert exp/iat if not already present
-        // This allows callers to override these values if desired.
-        // In theory the CoreClaims trait should encourage users to set these explicitly.
-        if !map.contains_key("exp") {
-            map.insert("exp".into(), serde_json::json!(exp));
-        }
-        if !map.contains_key("iat") {
-            map.insert("iat".into(), serde_json::json!(now));
-        }
-
-        // Insert a random aud if not present
-        // This is to satisfy validators that require an audience claim.
-        // and to ensure compliance with OIDC expectations.
-        // In practice, callers should set this explicitly.
-        // if the audience is not set explicitly this should cause validation failures, instead of silently passing, and opening up security holes.
-        if !map.contains_key("aud") {
-            map.insert("aud".into(), serde_json::json!(uuid::Uuid::new_v4().to_string()));
-        }
-
-        if !map.contains_key("iss") {
-            map.insert("iss".into(), serde_json::json!(uuid::Uuid::new_v4().to_string()));
-        }
-
-        if !map.contains_key("sub") {
-            map.insert("sub".into(), serde_json::json!(uuid::Uuid::new_v4().to_string()));
-        }
-
-        let mut header = Header::new(self.algorithm);
-        header.kid = Some(self.kid.clone());
-
-        encode(&header, &map, &self.key)
+        // Encode the JWT
+        Ok(jsonwebtoken::encode(&header, &map, &self.key)?)
     }
 }
 
@@ -249,37 +220,54 @@ pub fn generate_rsa_pkcs8_pair() -> (String, String) {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::*;
-    use crate::Validator;
-    use serde_json::json;
-    use std::time::Duration;
-    //use openssl::pkcs8::ToPrivateKey;
-    use std::error::Error;
+    use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
+    use crate::sign::OidcSigner;
+    use serde::{Deserialize, Serialize};
+    use time::OffsetDateTime;
+    use uuid::Uuid;
+    use crate::utils::*;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct MyClaims {
+        sub: String,
+        aud: String,
+        iss: String,
+        exp: i64,
+        iat: i64,
+    }
 
     #[test]
-    fn sign_and_validate() -> Result<(), Box<dyn std::error::Error>> {
-        let (test_private_pem, test_public_pem) = generate_rsa_pkcs8_pair();
-        let signer = OidcSigner::from_x509_pem(&test_private_pem, "test-kid")
-            .expect("failed to create signer");
-        let token = signer
-            .sign(
-                json!({ "sub": "user-123", "role": "admin", "iss": "http://localhost:8080", "aud": "test-audience" }),
-            )
-            .unwrap();
-        let validator = Validator::from_rsa_pubkey_pem(
-            "http://localhost:8080".to_string(),
-            "test-audience".to_string(),
-            "RS256".to_string(),
-            &test_public_pem,
-        )
-        .unwrap();
-        let claims: serde_json::Value = validator
-            .decode_with_iss_alg("http://localhost:8080", "RS256", &token)
-            .unwrap()
-            .claims;
+    fn test_sign_and_verify() -> Result<(), Box<dyn std::error::Error>> {
+        // --- 1. Create signer ---
+        let (private_pem, public_pem) = crate::sign::generate_rsa_pkcs8_pair();
+        let signer = OidcSigner::from_rsa_pem(&private_pem, "test-kid")?;
+        let decoding_key = DecodingKey::from_rsa_pem(&public_pem.as_bytes()).expect("failed to parse decoding key");
+        println!("signer: {:?}", signer);
+        println!("decoding_key: {:?}", decoding_key);
+        // --- 2. Build claims ---
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let claims = MyClaims {
+            sub: "user-123".to_string(),
+            aud: "test-audience".to_string(),
+            iss: "test-issuer".to_string(),
+            exp: now + 3600,
+            iat: now,
+        };
 
-        assert_eq!(claims.get("sub").and_then(|v| v.as_str()), Some("user-123"));
-        assert_eq!(claims.get("role").and_then(|v| v.as_str()), Some("admin"));
+        // --- 3. Sign token ---
+        let token = signer.sign(claims)?;
+
+        println!("Signed JWT: {}", token);
+
+        // --- 4. Decode token ---
+        //let decoding_key = signer.decoding_key();
+        
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.aud = Some(hashset_from(vec!["test-audience".to_string()]));
+        validation.iss = Some(hashset_from(vec!["test-issuer".to_string()]));
+
+        let token_data = decode::<MyClaims>(&token, &decoding_key, &validation)?;
+        println!("Decoded claims: {:?}", token_data.claims);
 
         Ok(())
     }

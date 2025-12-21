@@ -1,7 +1,7 @@
 use crate::AuthState;
 use crate::BaseClaims;
-use crate::client::IssuerData;
 use crate::check_expiration;
+use crate::client::IssuerData;
 use openidconnect::{AuthenticationFlow, CsrfToken, Nonce, Scope};
 use openidconnect::{AuthorizationCode, OAuth2TokenResponse, core::CoreResponseType};
 use rocket::http::SameSite;

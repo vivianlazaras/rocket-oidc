@@ -124,8 +124,8 @@ extern crate rocket;
 use std::fmt::Debug;
 pub mod auth;
 pub mod client;
-pub mod routes;
 pub mod errors;
+pub mod routes;
 pub mod utils;
 
 use errors::{OIDCError, UserInfoErr};
@@ -133,15 +133,12 @@ use errors::{OIDCError, UserInfoErr};
 pub mod sign;
 pub mod token;
 
-use utils::*;
+use crate::client::WorkingConfig;
+use crate::client::WorkingSessionConfig;
 use crate::client::{IssuerData, KeyID};
 use client::{OIDCClient, Validator};
 use rocket::http::Cookie;
 use rocket::response::Redirect;
-use crate::client::WorkingSessionConfig;
-use time::Duration;
-use time::OffsetDateTime;
-use crate::client::WorkingConfig;
 use rocket::{
     Build, Request, Rocket,
     http::Status,
@@ -150,6 +147,9 @@ use rocket::{
 use serde::de::DeserializeOwned;
 use std::env;
 use std::path::PathBuf;
+use time::Duration;
+use time::OffsetDateTime;
+use utils::*;
 
 use openidconnect::AdditionalClaims;
 use openidconnect::*;
@@ -188,7 +188,6 @@ impl AuthState {
         code: String,
         issuer: String,
     ) -> Result<Redirect, OIDCError> {
-        
         // ── 1. Short-circuit if valid access_token exists
         if let Some(cookie) = jar.get("access_token") {
             let (_, expired) = check_expiration(&cookie);
@@ -239,23 +238,22 @@ impl AuthState {
         // ── 5. Optionally re-sign the access token for your session config
         let (token, exp) = if let Some(session) = self.config.session_config() {
             // decode the original access token claims
-            let claims = self
-                .validator
-                .decode_with_iss_alg::<BaseClaims>(
-                    &iss,
-                    &chosen_alg,
-                    token.access_token().secret(),
-                )?;
+            let claims = self.validator.decode_with_iss_alg::<BaseClaims>(
+                &iss,
+                &chosen_alg,
+                token.access_token().secret(),
+            )?;
             sign_session_token(&claims.claims, session)?
-        }else{
-            let claims = self
-                .validator
-                .decode_with_iss_alg::<BaseClaims>(
-                    &iss,
-                    &chosen_alg,
-                    token.access_token().secret()
-                )?;
-            (token.access_token().secret().to_string(), OffsetDateTime::from_unix_timestamp(claims.claims.exp)?)
+        } else {
+            let claims = self.validator.decode_with_iss_alg::<BaseClaims>(
+                &iss,
+                &chosen_alg,
+                token.access_token().secret(),
+            )?;
+            (
+                token.access_token().secret().to_string(),
+                OffsetDateTime::from_unix_timestamp(claims.claims.exp)?,
+            )
         };
 
         // ── 6. Finalize login (also sets original token if you still want it)
@@ -318,7 +316,6 @@ struct BaseClaims {
     alg: String,
     aud: String,
     iat: i64,
-
 }
 
 impl CoreClaims for BaseClaims {
@@ -670,12 +667,11 @@ pub fn login(
     algorithm: &str,
     expiration: Option<OffsetDateTime>,
 ) -> Result<Redirect, OIDCError> {
-    
     let expires = match expiration {
         Some(expires) => expires,
-        None => {
-            OffsetDateTime::now_utc().checked_add(Duration::new(3600, 0)).expect("failed to add 1 hour")
-        }, 
+        None => OffsetDateTime::now_utc()
+            .checked_add(Duration::new(3600, 0))
+            .expect("failed to add 1 hour"),
     };
     // Add the access_token cookie
     jar.add(

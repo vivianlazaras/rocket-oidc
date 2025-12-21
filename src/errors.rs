@@ -1,11 +1,11 @@
-use thiserror::Error;
+use crate::KeyID;
+use openidconnect::{ConfigurationError, HttpClientError, RequestTokenError};
+use rocket::Request;
 use rocket::http::ContentType;
 use rocket::http::Status;
 use rocket::response;
 use std::io::Cursor;
-use crate::KeyID;
-use rocket::Request;
-use openidconnect::{HttpClientError, ConfigurationError, RequestTokenError};
+use thiserror::Error;
 
 pub type TokenErr = RequestTokenError<
     HttpClientError<reqwest::Error>,
@@ -32,7 +32,9 @@ pub enum OIDCError {
     #[error("serde JSON error: {0}")]
     JSONErr(#[from] serde_json::Error),
     #[error("discovery error: {0}")]
-    OIDCDiscoveryErr(#[from] openidconnect::DiscoveryError<openidconnect::HttpClientError<reqwest::Error>>),
+    OIDCDiscoveryErr(
+        #[from] openidconnect::DiscoveryError<openidconnect::HttpClientError<reqwest::Error>>,
+    ),
     #[error("reqwest error: {0}")]
     RequestErr(#[from] reqwest::Error),
     #[error("url parsing error: {0}")]
@@ -46,19 +48,29 @@ pub enum OIDCError {
     MissingIssuerUrl,
     #[error("missing algorithim for issuer")]
     MissingAlgoForIssuer(String),
-    
+
     #[error("openidconnect configuration error: {0}")]
     ConfigurationError(#[from] ConfigurationError),
-    
+
     #[error("token validation error: {0}")]
     TokenError(#[from] TokenErr),
-    
+
     #[error("pubkey {0:?} not found when trying to decode access token")]
     PubKeyNotFound(KeyID),
-    
+
     #[error("time component range error: {0}")]
     TimeRangeErr(#[from] time::error::ComponentRange),
+    #[error("missing required claim: {0}")]
+    MissingClaims(String),
 
+    #[error("claims error: {0}")]
+    InvalidClaims(String),
+    
+    #[error("PKCS8 error: {0}")]
+    PKCS8Err(#[from] pkcs8::spki::Error),
+
+    #[error("PKCS1 error: {0}")]
+    PKCS1Err(#[from] rsa::pkcs1::Error),
     #[error("{0}")]
     Custom(String),
 }
@@ -73,9 +85,9 @@ impl<'r> response::Responder<'r, 'static> for OIDCError {
     fn respond_to(self, _request: &'r Request<'_>) -> response::Result<'static> {
         let body = self.to_string();
         let status = match &self {
-            OIDCError::MissingClientId | OIDCError::MissingClientSecret | OIDCError::MissingIssuerUrl => {
-                Status::BadRequest
-            }
+            OIDCError::MissingClientId
+            | OIDCError::MissingClientSecret
+            | OIDCError::MissingIssuerUrl => Status::BadRequest,
             OIDCError::RequestErr(_) | OIDCError::ConfigurationError(_) | OIDCError::JSONErr(_) => {
                 Status::InternalServerError
             }

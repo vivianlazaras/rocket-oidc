@@ -4,22 +4,23 @@ use openidconnect::core::CoreGenderClaim;
 use openidconnect::core::*;
 use reqwest::Url;
 use serde_derive::*;
-use std::str::FromStr;
 use std::io::Read;
+use std::str::FromStr;
 
 use crate::CoreClaims;
-use crate::errors::OIDCError;
 use crate::OIDCConfig;
+use crate::errors::OIDCError;
+use rand::RngCore;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use rand::RngCore;
 
+use crate::sign::OidcSigner;
+use crate::utils::*;
 use crate::token::*;
 use serde::de::DeserializeOwned;
 use std::collections::HashSet;
 use std::path::Path;
-use crate::sign::OidcSigner;
 
 use openidconnect::reqwest;
 use openidconnect::*;
@@ -69,9 +70,7 @@ fn trim_trailing_whitespace(s: &str) -> String {
     s.trim_end().to_string()
 }
 
-fn load_client_secret<P: AsRef<Path>>(
-    secret_file: P,
-) -> Result<ClientSecret, std::io::Error> {
+fn load_client_secret<P: AsRef<Path>>(secret_file: P) -> Result<ClientSecret, std::io::Error> {
     let mut file = std::fs::File::open(secret_file.as_ref())?;
     let mut contents = String::new();
 
@@ -80,10 +79,6 @@ fn load_client_secret<P: AsRef<Path>>(
     #[cfg(debug_assertions)]
     println!("using secret: {}", secret);
     Ok(ClientSecret::new(secret))
-}
-
-fn hashset_from<T: std::cmp::Eq + std::hash::Hash>(vals: Vec<T>) -> HashSet<T> {
-    vals.into_iter().collect()
 }
 
 /// Configuration for session token creation and validation.
@@ -99,7 +94,6 @@ pub struct WorkingSessionConfig {
 }
 
 impl WorkingSessionConfig {
-
     /// Creates a new `SessionConfig` from a signing key and issuer URL.
     ///
     /// # Arguments
@@ -122,12 +116,12 @@ impl WorkingSessionConfig {
     }
 
     /// Creates a new [`WorkingSessionConfig`] from signing key, and issuer_url
-    /// 
+    ///
     /// # Arguments
     /// * `signing_key` - The OIDC signer used to sign session tokens.
     /// * `issuer_url` - The issuer URL for the session tokens.
     /// * `expiration_seconds` - Expiration time for session tokens in seconds.
-    /// 
+    ///
     /// Internally this function calls [`WorkingSessionConfig::new_with_key`] passing in a randomly generated base64 encoded 32 byte array
     pub fn new(signing_key: OidcSigner, issuer_url: String, expiration_seconds: u64) -> Self {
         let session_enc_key = base64::encode(generate_random_bytes(32));
@@ -725,9 +719,7 @@ impl OIDCClient {
     /// # Errors
     /// Returns an error if discovery fails, the JWKS endpoint cannot be fetched,
     /// or if the HTTP client cannot be built.
-    pub async fn from_oidc_config(
-        config: &OIDCConfig,
-    ) -> Result<(Self, Validator), OIDCError> {
+    pub async fn from_oidc_config(config: &OIDCConfig) -> Result<(Self, Validator), OIDCError> {
         let config = WorkingConfig::from_oidc_config(config)?;
 
         let http_client = reqwest::ClientBuilder::new()
@@ -736,8 +728,7 @@ impl OIDCClient {
             .build()?;
 
         let provider_metadata =
-            CoreProviderMetadata::discover_async(config.issuer_url.clone(), &http_client)
-                .await?;
+            CoreProviderMetadata::discover_async(config.issuer_url.clone(), &http_client).await?;
 
         // Decode and verify the JWT
         let mut validation = Validation::new(Algorithm::RS256);
@@ -891,7 +882,7 @@ impl OIDCClient {
             custom_validation,
             &provider_metadata,
             config.issuer_url.to_string(),
-            config.session_config.clone()
+            config.session_config.clone(),
         )
         .await?;
 
