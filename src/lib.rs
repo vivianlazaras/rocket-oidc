@@ -173,6 +173,19 @@ pub fn set_i64(value: &mut Value, key: &str, val: i64) {
     }
 }
 
+/// Sets a string value on a serde_json::Value object by key.
+/// If the Value is not already an object, it will be replaced with an empty object first.
+pub fn set_str(value: &mut Value, key: &str, val: &str) {
+    // Ensure the Value is an object
+    if !value.is_object() {
+        *value = Value::Object(Map::new());
+    }
+
+    if let Value::Object(map) = value {
+        map.insert(key.to_string(), Value::String(val.to_string()));
+    }
+}
+
 pub fn get_i64(value: &Value, key: &str) -> Result<i64, OIDCError> {
     Ok(value.get("exp").map(|v| v.as_i64()).flatten().ok_or(OIDCError::MissingClaims("exp".to_string()))?)
 }
@@ -182,8 +195,17 @@ pub(crate) fn sign_session_token(
     session: &WorkingSessionConfig,
 ) -> Result<(String, OffsetDateTime), OIDCError> {
     let mut new_claims = claims.clone();
-    let new_exp = OffsetDateTime::now_utc() + Duration::seconds(session.expiration_seconds as i64);
+    let now = OffsetDateTime::now_utc();
+    let new_exp = now + Duration::seconds(session.expiration_seconds as i64);
+    let new_iss = &session.issuer_url;
+    /// sets a new expiration based off of iat
     set_i64(&mut new_claims, "exp", new_exp.unix_timestamp());
+    /// sets the new iat claim (initiated at)
+    set_i64(&mut new_claims, "iat", now.unix_timestamp());
+    // sets the issuer to self
+    set_str(&mut new_claims, "iss", new_iss);
+    // sets a new session ID
+    set_str(&mut new_claims, "sid", Uuid::new_v4());
     let token = session.signing_key().sign(&new_claims)?;
     Ok((token, new_exp))
 }
