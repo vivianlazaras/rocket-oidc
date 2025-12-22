@@ -127,10 +127,15 @@ pub mod client;
 pub mod errors;
 pub mod routes;
 pub mod utils;
+#[cfg(feature = "server")]
+pub mod server;
+#[cfg(not(feature = "server"))]
+pub mod sign;
 
 use errors::{OIDCError, UserInfoErr};
 /// Utilities for acting as an OIDC token signer.
-pub mod sign;
+#[cfg(feature = "server")]
+pub use server::sign as sign;
 pub mod token;
 
 use uuid::Uuid;
@@ -280,7 +285,7 @@ impl AuthState {
         };
 
         // ── 5. Optionally re-sign the access token for your session config
-        let (token, exp) = if let Some(session) = self.config.session_config() {
+        let (session_token, exp) = if let Some(session) = self.config.session_config() {
             // decode the original access token claims
             // forgot this was the old token, not the new one, so use old issuer
             let claims = self.validator.decode_with_iss_alg::<Value>(
@@ -289,6 +294,7 @@ impl AuthState {
                 token.access_token().secret(),
             )?;
             sign_session_token(&claims.claims, session)?
+            
         } else {
             let claims = self.validator.decode_with_iss_alg::<Value>(
                 &issuer,
@@ -303,7 +309,7 @@ impl AuthState {
 
         // ── 6. Finalize login (also sets original token if you still want it)
         let redirect = self.config.post_login().to_string();
-        crate::login(redirect.clone(), jar, token, &iss, &chosen_alg, Some(exp))
+        crate::login(redirect.clone(), jar, session_token, token.access_token().secret().to_string(), &iss, &chosen_alg, Some(exp))
     }
 }
 
@@ -729,6 +735,7 @@ pub async fn setup(
 pub fn login(
     redirect: String,
     jar: &CookieJar<'_>,
+    session_token: String,
     access_token: String,
     issuer: &str,
     algorithm: &str,
@@ -742,7 +749,7 @@ pub fn login(
     };
     // Add the access_token cookie
     jar.add_private(
-        Cookie::build(("access_token", access_token))
+        Cookie::build(("access_token", session_token))
             .secure(false)
             .expires(expires)
             .http_only(true)
@@ -768,9 +775,9 @@ pub fn login(
     // Check for request_id cookie
     let redirect_url = if let Some(cookie) = jar.get("request_id") {
         let request_id = cookie.value();
-        format!("{}?state={}", redirect, request_id)
+        format!("{}?state={}&access_token={}", redirect, request_id, access_token)
     } else {
-        redirect
+        format!("{}?access_token={}", redirect, access_token)
     };
 
     Ok(Redirect::to(redirect_url))
