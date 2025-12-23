@@ -379,7 +379,7 @@ where
 {
     pub claims: T,
     pub userinfo: Option<UserInfo>,
-    pub access_token: String,
+    access_token: String,
     // Include other claims you care about here
 }
 
