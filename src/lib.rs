@@ -954,11 +954,11 @@ pub fn login(
     let redirect_url = if let Some(cookie) = jar.get("request_id") {
         let request_id = cookie.value();
         format!(
-            "{}?state={}&access_token={}",
-            redirect, request_id, &access_token
+            "{}?state={}",
+            redirect, request_id
         )
     } else {
-        format!("{}?access_token={}", redirect, &access_token)
+        redirect
     };
 
     Ok(Redirect::to(redirect_url))
