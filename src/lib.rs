@@ -371,11 +371,11 @@ impl UserInfo {
 /// and fetched user info.
 ///
 /// Generic over claim type `T` which must implement `CoreClaims`.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound = "T: Serialize + DeserializeOwned")]
 pub struct OIDCGuard<T: CoreClaims>
 where
-    T: Serialize + DeserializeOwned + Debug,
+    T: Serialize + DeserializeOwned + Debug + Clone,
 {
     pub claims: T,
     pub userinfo: Option<UserInfo>,
