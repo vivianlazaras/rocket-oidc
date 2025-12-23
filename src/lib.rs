@@ -383,6 +383,12 @@ where
     // Include other claims you care about here
 }
 
+impl<T: CoreClaims + Serialize + DeserializeOwned + Debug + Clone> OIDCGuard<T> {
+    pub fn access_token(&self) -> &str {
+        &self.access_token
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BaseClaims {
     exp: i64,
