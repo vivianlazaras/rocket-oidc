@@ -1,6 +1,6 @@
 [package]
 name = "rocket-oidc"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Rocket OpenID Connect utility crate, provides redirect route, and claims guard for OIDC"
 license = "MIT"
