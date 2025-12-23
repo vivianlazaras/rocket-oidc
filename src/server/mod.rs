@@ -1,9 +1,9 @@
-pub mod sign;
-pub mod routes;
-pub mod config;
 pub mod callbacks;
+pub mod config;
+pub mod routes;
+pub mod sign;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Comprehensive Keycloak OIDC discovery document.
@@ -351,21 +351,13 @@ impl OIDCServerBuilder {
             .authorization
             .unwrap_or_else(|| default_authorize.into());
 
-        let token = self
-            .token
-            .unwrap_or_else(|| default_token.into());
+        let token = self.token.unwrap_or_else(|| default_token.into());
 
-        let userinfo = self
-            .userinfo
-            .unwrap_or_else(|| default_userinfo.into());
+        let userinfo = self.userinfo.unwrap_or_else(|| default_userinfo.into());
 
-        let jwks = self
-            .jwks
-            .unwrap_or_else(|| default_jwks.into());
+        let jwks = self.jwks.unwrap_or_else(|| default_jwks.into());
 
-        let logout = self
-            .end_session
-            .unwrap_or_else(|| default_logout.into());
+        let logout = self.end_session.unwrap_or_else(|| default_logout.into());
 
         routes.extend([
             authorization.clone(),
@@ -375,9 +367,7 @@ impl OIDCServerBuilder {
             logout.clone(),
         ]);
 
-        let issuer = self
-            .issuer
-            .unwrap_or_else(|| base_url.to_string());
+        let issuer = self.issuer.unwrap_or_else(|| base_url.to_string());
 
         let doc = DiscoveryDocument {
             issuer,

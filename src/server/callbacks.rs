@@ -1,11 +1,12 @@
+use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::sync::Arc;
-use futures::future::BoxFuture;
 
 /// Type alias for a generic async endpoint handler
 /// `Input` is the request data type
 /// `Output` is the response type
-pub type AsyncHandler<Input, Output> = Arc<dyn Fn(Input) -> BoxFuture<'static, Output> + Send + Sync>;
+pub type AsyncHandler<Input, Output> =
+    Arc<dyn Fn(Input) -> BoxFuture<'static, Output> + Send + Sync>;
 
 pub struct DiscoveryDocumentCallbacks {
     // Example endpoints with strongly-typed async handlers
@@ -19,8 +20,8 @@ pub struct DiscoveryDocumentCallbacks {
     pub mtls_endpoint_aliases: Option<AsyncHandler<(), HashMap<String, String>>>,
 }
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 
 /// Represents an incoming authorization request (from the client to the /authorize endpoint)
 #[derive(Debug, Serialize, Deserialize)]
@@ -53,8 +54,8 @@ pub struct AuthorizationResponse {
 /// Represents an incoming token request (to the /token endpoint)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TokenRequest {
-    pub grant_type: String,       // e.g., "authorization_code", "refresh_token", etc.
-    pub code: Option<String>,     // for authorization_code flow
+    pub grant_type: String,   // e.g., "authorization_code", "refresh_token", etc.
+    pub code: Option<String>, // for authorization_code flow
     pub redirect_uri: Option<String>,
     pub refresh_token: Option<String>,
     pub client_id: Option<String>,
@@ -66,8 +67,8 @@ pub struct TokenRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TokenResponse {
     pub access_token: String,
-    pub token_type: String,       // e.g., "Bearer"
-    pub expires_in: Option<u64>,  // seconds
+    pub token_type: String,      // e.g., "Bearer"
+    pub expires_in: Option<u64>, // seconds
     pub refresh_token: Option<String>,
     pub scope: Option<String>,
     pub id_token: Option<String>,

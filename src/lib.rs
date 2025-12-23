@@ -126,38 +126,41 @@ pub mod auth;
 pub mod client;
 pub mod errors;
 pub mod routes;
-pub mod utils;
 #[cfg(feature = "server")]
 pub mod server;
 #[cfg(not(feature = "server"))]
 pub mod sign;
+pub mod utils;
 
 use errors::{OIDCError, UserInfoErr};
 /// Utilities for acting as an OIDC token signer.
 #[cfg(feature = "server")]
-pub use server::sign as sign;
+pub use server::sign;
 pub mod token;
 
-use uuid::Uuid;
 use crate::client::WorkingConfig;
 use crate::client::WorkingSessionConfig;
 use crate::client::{IssuerData, KeyID};
 use client::{OIDCClient, Validator};
 use rocket::http::Cookie;
 use rocket::response::Redirect;
-use std::collections::HashSet;
-use serde_json::{Value, Map, Number};
 use rocket::{
     Build, Request, Rocket,
     http::Status,
     request::{FromRequest, Outcome},
 };
 use serde::de::DeserializeOwned;
+use serde_json::{Map, Number, Value};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
+use std::sync::Arc;
 use time::Duration;
 use time::OffsetDateTime;
+use tokio::sync::RwLock;
 use utils::*;
+use uuid::Uuid;
 
 use openidconnect::AdditionalClaims;
 use openidconnect::*;
@@ -175,7 +178,6 @@ pub fn set_i64(value: &mut Value, key: &str, val: i64) {
 
     if let Value::Object(map) = value {
         map.insert(key.to_string(), Value::Number(val.into()));
-        
     }
 }
 
@@ -193,7 +195,11 @@ pub fn set_str(value: &mut Value, key: &str, val: &str) {
 }
 
 pub fn get_i64(value: &Value, key: &str) -> Result<i64, OIDCError> {
-    Ok(value.get("exp").map(|v| v.as_i64()).flatten().ok_or(OIDCError::MissingClaims("exp".to_string()))?)
+    Ok(value
+        .get("exp")
+        .map(|v| v.as_i64())
+        .flatten()
+        .ok_or(OIDCError::MissingClaims("exp".to_string()))?)
 }
 
 pub(crate) fn sign_session_token(
@@ -228,6 +234,8 @@ pub struct AuthState {
     pub validator: Validator,
     pub client: OIDCClient,
     pub config: WorkingConfig,
+    // a collection of refresh tokens identified by iss
+    pub tokens: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl AuthState {
@@ -250,26 +258,32 @@ impl AuthState {
             None => &issuer,
         };
 
-        // ── 2. Exchange authorization code for token
-        let token = self
+        // ── 2. Exchange authorization code for tokens
+        let token_response = self
             .client
             .exchange_code(AuthorizationCode::new(code))
             .await?;
 
-        // ── 3. Determine expiration
-        let expires_at = match token.expires_in() {
+        // ── 3. Store the refresh token in self.tokens
+        if let Some(refresh_token) = token_response.refresh_token() {
+            let mut tokens_guard = self.tokens.write().await;
+            tokens_guard.insert(iss.clone(), refresh_token.secret().to_string());
+        }
+
+        // ── 4. Determine expiration of access token
+        let expires_at = match token_response.expires_in() {
             Some(expires_in) => OffsetDateTime::now_utc() + expires_in,
             None => {
                 let token_data = self
                     .validator
-                    .decode::<Value>(token.access_token().secret())?;
+                    .decode::<Value>(token_response.access_token().secret())?;
 
                 OffsetDateTime::from_unix_timestamp(get_i64(&token_data.claims, "exp")?)
                     .unwrap_or_else(|_| OffsetDateTime::now_utc())
             }
         };
 
-        // ── 4. Select algorithm for issuer
+        // ── 5. Select algorithm for issuer
         let supported_algs = self
             .validator
             .get_supported_algorithms_for_issuer(&iss)
@@ -284,35 +298,44 @@ impl AuthState {
                 .ok_or(OIDCError::MissingAlgoForIssuer(iss.clone()))?
         };
 
-        // ── 5. Optionally re-sign the access token for your session config
-        let (session_token, exp) = if let Some(session) = self.config.session_config() {
-            // decode the original access token claims
-            // forgot this was the old token, not the new one, so use old issuer
-            let claims = self.validator.decode_with_iss_alg::<Value>(
-                &issuer,
-                &chosen_alg,
-                token.access_token().secret(),
-            )?;
-            sign_session_token(&claims.claims, session)?
-            
-        } else {
-            let claims = self.validator.decode_with_iss_alg::<Value>(
-                &issuer,
-                &chosen_alg,
-                token.access_token().secret(),
-            )?;
-            (
-                token.access_token().secret().to_string(),
-                OffsetDateTime::from_unix_timestamp(get_i64(&claims.claims, "exp")?)?,
-            )
+        // ── 7. Finalize login
+        let redirect = self.config.post_login().to_string();
+        crate::login(
+            redirect.clone(),
+            jar,
+            token_response.access_token().secret().to_string(),
+            &iss,
+            &chosen_alg,
+            Some(expires_at),
+        )
+    }
+
+    /// Optional: refresh an access token for a given issuer
+    pub async fn refresh_access_token(&self, issuer: &str) -> Result<String, OIDCError> {
+        let refresh_token = {
+            let tokens_guard = self.tokens.read().await;
+            tokens_guard.get(issuer).cloned()
         };
 
-        // ── 6. Finalize login (also sets original token if you still want it)
-        let redirect = self.config.post_login().to_string();
-        crate::login(redirect.clone(), jar, session_token, token.access_token().secret().to_string(), &iss, &chosen_alg, Some(exp))
+        let refresh_token = match refresh_token {
+            Some(t) => RefreshToken::new(t),
+            None => return Err(OIDCError::MissingRefreshToken),
+        };
+
+        let token_response = self
+            .client
+            .exchange_refresh_token(&refresh_token)
+            .await?;
+
+        // Update stored refresh token if rotated
+        if let Some(new_refresh_token) = token_response.refresh_token() {
+            let mut tokens_guard = self.tokens.write().await;
+            tokens_guard.insert(issuer.to_string(), new_refresh_token.secret().to_string());
+        }
+
+        Ok(token_response.access_token().secret().to_string())
     }
 }
-
 /// Represents a localized claim value, such as a name or address
 /// that may have an associated language.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -355,7 +378,8 @@ where
     T: Serialize + DeserializeOwned + Debug,
 {
     pub claims: T,
-    pub userinfo: UserInfo,
+    pub userinfo: Option<UserInfo>,
+    pub access_token: String,
     // Include other claims you care about here
 }
 
@@ -387,7 +411,7 @@ impl CoreClaims for BaseClaims {
         self.iat
     }
 
-    fn expiration(&self) -> i64 {
+    fn exp(&self) -> i64 {
         self.exp
     }
 }
@@ -399,47 +423,35 @@ pub trait CoreClaims: Clone {
     fn issuer(&self) -> Vec<String>;
     fn audience(&self) -> Vec<String>;
     fn issued_at(&self) -> i64;
-    fn expiration(&self) -> i64 {
-        3600 // default to 1 hour``   
-    }
+    fn exp(&self) -> i64;
 }
 
 /// this impl intentionally leaks memory and should thus only ever be used for testing
 impl CoreClaims for Value {
     fn subject(&self) -> &str {
-        self.get("sub")
-            .and_then(Value::as_str)
-            .unwrap_or("")
+        self.get("sub").and_then(Value::as_str).unwrap_or("")
     }
 
     fn issuer(&self) -> Vec<String> {
-        
-            match self.get("iss") {
-                Some(val) => value_to_str_slice(val),
-                None => Vec::new(),
-            }
-        
+        match self.get("iss") {
+            Some(val) => value_to_str_slice(val),
+            None => Vec::new(),
+        }
     }
 
     fn audience(&self) -> Vec<String> {
-        
-            match self.get("aud") {
-                Some(val) => value_to_str_slice(val),
-                None => Vec::new(),
-            }
-        
+        match self.get("aud") {
+            Some(val) => value_to_str_slice(val),
+            None => Vec::new(),
+        }
     }
 
     fn issued_at(&self) -> i64 {
-        self.get("iat")
-            .and_then(Value::as_i64)
-            .unwrap_or(0)
+        self.get("iat").and_then(Value::as_i64).unwrap_or(0)
     }
 
-    fn expiration(&self) -> i64 {
-        self.get("exp")
-            .and_then(Value::as_i64)
-            .unwrap_or(3600)
+    fn exp(&self) -> i64 {
+        self.get("exp").and_then(Value::as_i64).unwrap_or(3600)
     }
 }
 
@@ -488,6 +500,7 @@ pub struct PronounClaim {}
 
 impl GenderClaim for PronounClaim {}
 
+/*
 #[rocket::async_trait]
 impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims> FromRequest<'r>
     for OIDCGuard<T>
@@ -499,7 +512,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
         let auth = req.rocket().state::<AuthState>().unwrap().clone();
 
         if let Some(access_token) = cookies.get_private("access_token") {
-            let token_result = if let Some(issuer_cookie) = cookies.get("issuer_data") {
+            let token_result = if let Some(issuer_cookie) = cookies.get_private("issuer_data") {
                 // Parse issuer_data JSON
                 match serde_json::from_str::<IssuerData>(issuer_cookie.value()) {
                     Ok(issuer_data) => auth.validator.decode_with_iss_alg::<T>(
@@ -551,6 +564,165 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
             Outcome::Forward(Status::Unauthorized)
         }
     }
+}*/
+
+#[rocket::async_trait]
+impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims> FromRequest<'r>
+    for OIDCGuard<T>
+{
+    type Error = ();
+
+    async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        let cookies = req.cookies();
+        let auth = req.rocket().state::<AuthState>().unwrap().clone();
+
+        // Extract issuer information
+        let issuer_data: Option<IssuerData> = cookies
+            .get_private("issuer_data")
+            .and_then(|c| serde_json::from_str(c.value()).ok());
+
+        let issuer = match &issuer_data {
+            Some(data) => &data.issuer,
+            None => {
+                eprintln!("No issuer_data cookie");
+                return Outcome::Forward(Status::Unauthorized);
+            }
+        };
+
+        let alg = match &issuer_data {
+            Some(data) => &data.algorithm,
+            None => {
+                eprintln!("No issuer_data cookie");
+                return Outcome::Forward(Status::Unauthorized);
+            }
+        };
+
+        // Attempt to read access token from cookies
+        let mut access_token_value = cookies
+            .get_private("access_token")
+            .map(|c| c.value().to_string());
+
+        // Check expiration if token exists
+        let token_needs_refresh = if let Some(ref token_val) = access_token_value {
+            match auth.validator.decode_with_iss_alg::<T>(
+                issuer,
+                &issuer_data.as_ref().unwrap().algorithm,
+                token_val,
+            ) {
+                Ok(data) => {
+                    let exp = OffsetDateTime::from_unix_timestamp(data
+                        .claims.exp()).unwrap_or(OffsetDateTime::now_utc());
+                    exp <= OffsetDateTime::now_utc()
+                }
+                Err(_) => true,
+            }
+        } else {
+            true
+        };
+
+        if !token_needs_refresh {
+            let claims = match auth.validator.decode_with_iss_alg(
+                issuer,
+                alg,
+                access_token_value.as_ref().unwrap(),
+            ) {
+                Ok(claims) => claims,
+                Err(e) => {
+                    eprintln!("failed to decode claims: {e}");
+                    return Outcome::Forward(Status::Unauthorized);
+                }
+            };
+            return Outcome::Success(OIDCGuard {
+                claims: claims.claims,
+                access_token: access_token_value.unwrap(),
+                userinfo: None,
+            });
+        }
+
+        // Get stored refresh token for this issuer
+        let refresh_token_str = {
+            let tokens_guard = auth.tokens.read().await;
+            tokens_guard.get(issuer).cloned()
+        };
+
+        let refresh_token_str = match refresh_token_str {
+            Some(t) => t,
+            None => {
+                eprintln!("No refresh token stored for issuer: {}", issuer);
+                return Outcome::Forward(Status::Unauthorized);
+            }
+        };
+
+        let refresh_token = RefreshToken::new(refresh_token_str.clone());
+
+        // Refresh access token if needed
+        if token_needs_refresh {
+            /*let try_refresh = match auth.client.exchange_refresh_token(&refresh_token).await {
+                Ok(val) => val,
+                Err(e) => {
+                    eprintln!("failed to refresh token {e}");
+                    return Outcome::Forward(Status::Unauthorized);
+                }
+            };*/
+            match auth.client.exchange_refresh_token(&refresh_token).await
+            {
+                Ok(new_token) => {
+                    // Update refresh token if rotated
+                    if let Some(new_refresh) = new_token.refresh_token() {
+                        let mut tokens_guard = auth.tokens.write().await;
+                        tokens_guard.insert(issuer.clone(), new_refresh.secret().to_string());
+                    }
+                    access_token_value = Some(new_token.access_token().secret().to_string());
+                    // Update cookie
+                    cookies.add_private(
+                        Cookie::build(("access_token", access_token_value.clone().unwrap()))
+                            .http_only(true)
+                            .finish(),
+                    );
+                }
+                Err(err) => {
+                    eprintln!("Failed to refresh access token: {:?}", err);
+                    return Outcome::Forward(Status::Unauthorized);
+                }
+            }
+        }
+
+        // Decode access token now
+        let access_token_val = access_token_value.unwrap();
+        let claims = match auth.validator.decode_with_iss_alg::<T>(
+            issuer,
+            &issuer_data.as_ref().unwrap().algorithm,
+            &access_token_val,
+        ) {
+            Ok(data) => data.claims,
+            Err(err) => {
+                eprintln!("Token decode failed: {:?}", err);
+                return Outcome::Forward(Status::Unauthorized);
+            }
+        };
+
+        // Optionally fetch userinfo
+        let userinfo = match auth
+            .client
+            .user_info(
+                AccessToken::new(access_token_val.clone()),
+                None::<SubjectIdentifier>,
+            )
+            .await
+        {
+            Ok(info) => Some(UserInfo::try_from(info).unwrap()),
+            Err(err) => {
+                eprintln!("Failed to fetch userinfo: {:?}", err);
+                None
+            }
+        };
+
+        Outcome::Success(OIDCGuard {
+            claims,
+            userinfo,
+            access_token: access_token_val,
+        })
+    }
 }
 
 /// Builds the authentication state by initializing the OIDC client
@@ -566,6 +738,7 @@ pub async fn from_provider_oidc_config(
         client,
         validator,
         config: (&config).try_into()?,
+        tokens: Arc::new(RwLock::new(HashMap::new())),
     })
 }
 
@@ -735,7 +908,6 @@ pub async fn setup(
 pub fn login(
     redirect: String,
     jar: &CookieJar<'_>,
-    session_token: String,
     access_token: String,
     issuer: &str,
     algorithm: &str,
@@ -749,7 +921,7 @@ pub fn login(
     };
     // Add the access_token cookie
     jar.add_private(
-        Cookie::build(("access_token", session_token))
+        Cookie::build(("access_token", access_token.clone()))
             .secure(false)
             .expires(expires)
             .http_only(true)
@@ -775,9 +947,12 @@ pub fn login(
     // Check for request_id cookie
     let redirect_url = if let Some(cookie) = jar.get("request_id") {
         let request_id = cookie.value();
-        format!("{}?state={}&access_token={}", redirect, request_id, access_token)
+        format!(
+            "{}?state={}&access_token={}",
+            redirect, request_id, &access_token
+        )
     } else {
-        format!("{}?access_token={}", redirect, access_token)
+        format!("{}?access_token={}", redirect, &access_token)
     };
 
     Ok(Redirect::to(redirect_url))

@@ -65,9 +65,12 @@ pub enum OIDCError {
 
     #[error("claims error: {0}")]
     InvalidClaims(String),
-    
+
     #[error("PKCS8 error: {0}")]
     PKCS8Err(#[from] pkcs8::spki::Error),
+
+    #[error("missing refresh token")]
+    MissingRefreshToken,
 
     #[error("PKCS1 error: {0}")]
     PKCS1Err(#[from] rsa::pkcs1::Error),

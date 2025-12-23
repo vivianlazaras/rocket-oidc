@@ -1,7 +1,7 @@
-use rocket::serde::{json::Json, Deserialize, Serialize};
+use super::callbacks::*;
+use rocket::serde::{Deserialize, Serialize, json::Json};
 use rocket::{get, post, routes};
 use std::collections::HashSet;
-use super::callbacks::*;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Pluggable Authentication Handler Trait

@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 use crate::sign::OidcSigner;
-use crate::utils::*;
 use crate::token::*;
+use crate::utils::*;
 use serde::de::DeserializeOwned;
 use std::collections::HashSet;
 use std::path::Path;
@@ -827,6 +827,17 @@ impl OIDCClient {
         Ok(self
             .client
             .exchange_code(code)?
+            .request_async(&self.reqwest_client)
+            .await?)
+    }
+
+    pub async fn exchange_refresh_token(
+        &self,
+        token: &RefreshToken,
+    ) -> Result<CoreTokenResponse, crate::errors::OIDCError> {
+        Ok(self
+            .client
+            .exchange_refresh_token(token)?
             .request_async(&self.reqwest_client)
             .await?)
     }

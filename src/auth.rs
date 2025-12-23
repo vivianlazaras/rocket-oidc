@@ -11,6 +11,8 @@ use std::fmt::Debug;
 
 use crate::client::Validator;
 
+/// [`AuthGuard`] is similar to [`crate::OIDCGuard`] except that its built only to parse an access token from a cookie, and doesn't require an OIDCClient
+/// This is useful for testing but probably shouldn't be used in production environments, if you need pure token parsing, [`ApiKeyGuard`] that loads from Bearer field may be preferable, and more semantically correct given this doesn't handle refresh tokens.
 #[derive(Debug, Clone)]
 pub struct AuthGuard<T: Serialize + DeserializeOwned + Debug> {
     pub claims: T,

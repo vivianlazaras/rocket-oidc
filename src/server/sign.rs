@@ -51,11 +51,11 @@
 //! - This module focuses on producing signed tokens. Use a separate validator
 //!   component to verify tokens and validate standard OIDC claims such as `iss`,
 //!   `aud` and expiry when consuming tokens.
+use crate::utils::*;
+use jsonwebtoken::DecodingKey;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
-use jsonwebtoken::DecodingKey;
-use crate::utils::*;
 
 /// An OpenID Connect (OIDC) JWT signer backed by an encoding key.
 ///
@@ -184,7 +184,7 @@ impl OidcSigner {
 
         // Build JWT header
         let mut header = jsonwebtoken::Header::new(self.algorithm);
-        
+
         // Encode the JWT
         Ok(jsonwebtoken::encode(&header, &map, &self.key)?)
     }
@@ -220,12 +220,12 @@ pub fn generate_rsa_pkcs8_pair() -> (String, String) {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
     use crate::sign::OidcSigner;
+    use crate::utils::*;
+    use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
     use serde::{Deserialize, Serialize};
     use time::OffsetDateTime;
     use uuid::Uuid;
-    use crate::utils::*;
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct MyClaims {
@@ -261,7 +261,7 @@ pub(crate) mod tests {
 
         // --- 4. Decode token ---
         //let decoding_key = signer.decoding_key();
-        
+
         let mut validation = Validation::new(Algorithm::RS256);
         validation.aud = Some(hashset_from(vec!["test-audience".to_string()]));
         validation.iss = Some(hashset_from(vec!["test-issuer".to_string()]));

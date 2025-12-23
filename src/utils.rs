@@ -1,16 +1,16 @@
 //! Convenience functions throughout the crate go here
-use cookie::Expiration;
-use rocket::http::Cookie;
-use time::OffsetDateTime;
-use rsa::{RsaPrivateKey, RsaPublicKey};
-use rsa::pkcs8::{DecodePrivateKey, EncodePublicKey};
-use jsonwebtoken::DecodingKey;
 use crate::errors::OIDCError;
+use cookie::Expiration;
+use jsonwebtoken::DecodingKey;
+use rocket::http::Cookie;
 use rsa::pkcs1::DecodeRsaPrivateKey;
+use rsa::pkcs8::{DecodePrivateKey, EncodePublicKey};
+use rsa::{RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Deserializer};
+use time::OffsetDateTime;
 
-use std::collections::HashSet;
 use serde_json::Value;
+use std::collections::HashSet;
 
 /// a convience method to handle singleton or sequence when deserializing values with serde.
 pub fn string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -29,7 +29,6 @@ where
         Helper::Many(v) => v.into_iter().collect(),
     })
 }
-
 
 /// this function intentionally leaks memory.
 pub fn value_to_str_slice(value: &Value) -> Vec<String> {
@@ -57,13 +56,9 @@ pub fn value_to_str_slice(value: &Value) -> Vec<String> {
     }
 }
 
-
-
 /// Load an RSA private key (PKCS#1 or PKCS#8 PEM),
 /// extract the public key, and build a DecodingKey from it.
-pub fn decoding_key_from_private_pem(
-    private_pem: &str,
-) -> Result<DecodingKey, OIDCError> {
+pub fn decoding_key_from_private_pem(private_pem: &str) -> Result<DecodingKey, OIDCError> {
     // Load private key (handles PKCS#1 and PKCS#8)
     let private = RsaPrivateKey::from_pkcs8_pem(private_pem)
         .or_else(|_| RsaPrivateKey::from_pkcs1_pem(private_pem))?;
@@ -77,7 +72,6 @@ pub fn decoding_key_from_private_pem(
     // Build DecodingKey strictly from public material
     Ok(DecodingKey::from_rsa_pem(public_pem.as_bytes())?)
 }
-
 
 pub fn check_expiration(cookie: &Cookie<'_>) -> (Option<OffsetDateTime>, bool) {
     match cookie.expires() {
