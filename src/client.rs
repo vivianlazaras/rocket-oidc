@@ -143,7 +143,7 @@ pub struct WorkingConfig {
     client_id: ClientId,
     issuer_url: IssuerUrl,
     redirect: String,
-    session_config: Option<WorkingSessionConfig>,
+    //session_config: Option<WorkingSessionConfig>,
     post_login: Option<String>,
 }
 
@@ -198,11 +198,11 @@ impl WorkingConfig {
             client_secret,
             issuer_url,
             redirect: config.redirect.clone(),
-            session_config,
             post_login: config.post_login.clone(),
         })
     }
 
+    /*
     pub fn session_config(&self) -> &Option<WorkingSessionConfig> {
         &self.session_config
     }
@@ -223,7 +223,7 @@ impl WorkingConfig {
         } else {
             None
         }
-    }
+    }*/
 
     pub fn post_login(&self) -> &str {
         match &self.post_login {
@@ -742,17 +742,17 @@ impl OIDCClient {
             validation.iss = Some(hashset_from(vec![config.issuer_url.to_string()])); // Validate the issuer
         };
 
-        let session = if let Some(session) = &config.session_config {
+        /*let session = if let Some(session) = &config.session_config {
             Some(session.clone())
         } else {
             None
-        };
+        };*/
 
         let validator = Validator::new(
             validation,
             &provider_metadata,
             config.issuer_url.to_string(),
-            session,
+            None,
         )
         .await?;
 
@@ -893,7 +893,7 @@ impl OIDCClient {
             custom_validation,
             &provider_metadata,
             config.issuer_url.to_string(),
-            config.session_config.clone(),
+            None,
         )
         .await?;
 

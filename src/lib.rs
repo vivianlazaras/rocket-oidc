@@ -126,9 +126,6 @@ pub mod auth;
 pub mod client;
 pub mod errors;
 pub mod routes;
-#[cfg(feature = "server")]
-pub mod server;
-#[cfg(not(feature = "server"))]
 pub mod sign;
 pub mod utils;
 
@@ -144,6 +141,8 @@ use crate::client::{IssuerData, KeyID};
 use client::{OIDCClient, Validator};
 use rocket::http::Cookie;
 use rocket::response::Redirect;
+use crate::auth::get_iss_alg;
+use crate::auth::IDClaims;
 use rocket::{
     Build, Request, Rocket,
     http::Status,
@@ -245,18 +244,24 @@ impl AuthState {
         code: String,
         issuer: String,
     ) -> Result<Redirect, OIDCError> {
+        let iss = &issuer;
         // ── 1. Short-circuit if valid access_token exists
         if let Some(cookie) = jar.get_private("access_token") {
-            let (_, expired) = check_expiration(&cookie);
-            if !expired {
-                return Ok(Redirect::to(self.config.post_login().to_string()));
+            // attempt to decode access token for invalid signature.
+            let token = cookie.to_string();
+            // this should catch invalid signature, and result in refresh.
+            if let Some(idclaims) = get_iss_alg(&token) {
+                if let Ok(decoded) = self.validator.decode_with_iss_alg::<BaseClaims>(iss, &idclaims.alg, &token) {
+                    
+                    let (_, expired) = check_expiration(&cookie);
+                    if let Ok(exp) = OffsetDateTime::from_unix_timestamp(idclaims.exp) && !expired {
+                        if exp > OffsetDateTime::now_utc() {
+                            return Ok(Redirect::to(self.config.post_login().to_string()));
+                        }
+                    }
+                }
             }
         }
-
-        let iss = match self.config.session_config() {
-            Some(session) => &session.issuer_url,
-            None => &issuer,
-        };
 
         // ── 2. Exchange authorization code for tokens
         let token_response = self
@@ -304,7 +309,7 @@ impl AuthState {
             redirect.clone(),
             jar,
             token_response.access_token().secret().to_string(),
-            &iss,
+            &issuer,
             &chosen_alg,
             Some(expires_at),
         )
@@ -383,6 +388,16 @@ where
     // Include other claims you care about here
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound = "T: Serialize + DeserializeOwned")]
+pub struct OIDCKeyGuard<T: CoreClaims>
+where
+    T: Serialize + DeserializeOwned + Debug + Clone,
+{
+    pub claims: T,
+    access_token: String,
+}
+
 impl<T: CoreClaims + Serialize + DeserializeOwned + Debug + Clone> OIDCGuard<T> {
     pub fn access_token(&self) -> &str {
         &self.access_token
@@ -390,7 +405,7 @@ impl<T: CoreClaims + Serialize + DeserializeOwned + Debug + Clone> OIDCGuard<T> 
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct BaseClaims {
+pub(crate) struct BaseClaims {
     exp: i64,
     sub: String,
     #[serde(deserialize_with = "string_or_vec")]
@@ -506,74 +521,145 @@ pub struct PronounClaim {}
 
 impl GenderClaim for PronounClaim {}
 
-/*
-#[rocket::async_trait]
-impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims> FromRequest<'r>
-    for OIDCGuard<T>
-{
-    type Error = ();
+fn iss_alg_from_cookies(cookies: &CookieJar<'_>) -> Outcome<IssuerData, ()> {
+    // Extract issuer information
+    let issuer_data: Option<IssuerData> = cookies
+        .get_private("issuer_data")
+        .and_then(|c| serde_json::from_str(c.value()).ok());
 
-    async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
-        let cookies = req.cookies();
-        let auth = req.rocket().state::<AuthState>().unwrap().clone();
+    let issuer = match &issuer_data {
+        Some(data) => &data.issuer,
+        None => {
+            // I think the ISS cookie is expiring too quickly relative to access token.
+            // issuer_data should live as long as refresh_token.
+            eprintln!("No issuer_data cookie");
+            return Outcome::Forward(Status::Unauthorized);
+        }
+    };
+    if cfg!(debug_assertions) {
+        eprintln!("using issuer: {}", issuer);
+    }
 
-        if let Some(access_token) = cookies.get_private("access_token") {
-            let token_result = if let Some(issuer_cookie) = cookies.get_private("issuer_data") {
-                // Parse issuer_data JSON
-                match serde_json::from_str::<IssuerData>(issuer_cookie.value()) {
-                    Ok(issuer_data) => auth.validator.decode_with_iss_alg::<T>(
-                        &issuer_data.issuer,
-                        &issuer_data.algorithm,
-                        access_token.value(),
-                    ),
-                    Err(err) => {
-                        eprintln!("Failed to parse issuer_data cookie: {:?}", err);
-                        cookies.remove(Cookie::build("access_token"));
-                        return Outcome::Forward(Status::Unauthorized);
-                    }
-                }
-            } else {
-                // Fall back to default decode
-                auth.validator.decode::<T>(access_token.value())
-            };
+    let alg = match &issuer_data {
+        Some(data) => &data.algorithm,
+        None => {
+            eprintln!("No issuer_data cookie");
+            return Outcome::Forward(Status::Unauthorized);
+        }
+    };
 
-            match token_result {
-                Ok(data) => {
-                    // Try to fetch userinfo claims from userinfo endpoint
-                    let userinfo_result: Result<UserInfoClaims<AddClaims, PronounClaim>, _> = auth
-                        .client
-                        .user_info(
-                            AccessToken::new(access_token.value().to_string()),
-                            Some(SubjectIdentifier::new(data.claims.subject().to_string())),
-                        )
-                        .await;
+    Outcome::Success( IssuerData { issuer: issuer.to_string(), algorithm: alg.to_string() })
+}
 
-                    match userinfo_result {
-                        Ok(userinfo) => Outcome::Success(OIDCGuard {
-                            claims: data.claims,
-                            userinfo: UserInfo::try_from(userinfo).unwrap(),
-                        }),
-                        Err(e) => {
-                            eprintln!("Failed to fetch userinfo: {:?}", e);
-                            Outcome::Forward(Status::Unauthorized)
-                        }
-                    }
-                }
-                Err(err) => {
-                    eprintln!("Token decode failed: {:?}", err);
-                    cookies.remove(Cookie::build("access_token"));
-                    Outcome::Forward(Status::Unauthorized)
-                }
+struct OIDCData<T: Serialize + DeserializeOwned + CoreClaims + Debug + Clone> {
+    claims: T,
+    userinfo: Option<UserInfo>,
+    access_token: String,
+}
+
+async fn parse_oidc_token<T: Serialize + DeserializeOwned + CoreClaims + Debug + Clone + Send + Sync>(auth: &AuthState, issuer: &str, alg: &str, access_token: &str) -> Outcome<OIDCData<T>, ()> {
+    let mut access_token_value = access_token.to_string();
+    let token_needs_refresh = match auth.validator.decode_with_iss_alg::<T>(
+        issuer,
+        alg,
+        &access_token_value,
+    ) {
+        Ok(data) => {
+            
+            let exp = OffsetDateTime::from_unix_timestamp(data
+                .claims.exp() - 10).unwrap_or(OffsetDateTime::now_utc());
+            if exp > OffsetDateTime::now_utc() {
+                // short circuit access token is valid.
+                println!("short circuiting in parse_oidc_token");
+                return Outcome::Success(OIDCData {
+                    claims: data.claims,
+                    access_token: access_token_value,
+                    userinfo: None,
+                });
+            }else{
+                true
             }
-        } else {
-            eprintln!("No access token found");
-            Outcome::Forward(Status::Unauthorized)
+        }
+        Err(e) => {
+            // this should check if InvalidSignature v ExpiredSignature
+            // if invalid return unauthorized, if expired refresh the token
+            true
+        },
+    };
+    println!("going through refresh cycle");
+    // Get stored refresh token for this issuer
+    let refresh_token_str = {
+        let tokens_guard = auth.tokens.read().await;
+        tokens_guard.get(issuer).cloned()
+    };
+
+    let refresh_token_str = match refresh_token_str {
+        Some(t) => t,
+        None => {
+            eprintln!("No refresh token stored for issuer: {}", issuer);
+            return Outcome::Forward(Status::Unauthorized);
+        }
+    };
+
+    let refresh_token = RefreshToken::new(refresh_token_str.clone());
+
+    // token needs to be refreshed otherwise early return / short circuit would have happened
+    match auth.client.exchange_refresh_token(&refresh_token).await
+    {
+        Ok(new_token) => {
+            // Update refresh token if rotated
+            if let Some(new_refresh) = new_token.refresh_token() {
+                let mut tokens_guard = auth.tokens.write().await;
+                tokens_guard.insert(issuer.to_string(), new_refresh.secret().to_string());
+            }
+            access_token_value = new_token.access_token().secret().to_string();
+            
+        }
+        Err(err) => {
+            eprintln!("Failed to refresh access token: {:?}", err);
+            return Outcome::Forward(Status::Unauthorized);
         }
     }
-}*/
+
+    let claims = match auth.validator.decode_with_iss_alg::<T>(
+        issuer,
+        alg,
+        &access_token_value,
+    ) {
+        Ok(data) => data.claims,
+        Err(err) => {
+            eprintln!("Token decode failed: {:?}", err);
+            return Outcome::Forward(Status::Unauthorized);
+        }
+    };
+
+    // Optionally fetch userinfo
+    let userinfo = match auth
+        .client
+        .user_info(
+            AccessToken::new(access_token_value.clone()),
+            None::<SubjectIdentifier>,
+        )
+        .await
+    {
+        Ok(info) => Some(UserInfo::try_from(info).unwrap()),
+        Err(err) => {
+            eprintln!("Failed to fetch userinfo: {:?}", err);
+            None
+        }
+    };
+    if cfg!(debug_assertions) {
+        println!("returning after refresh");
+    }
+    Outcome::Success(OIDCData {
+        claims,
+        userinfo,
+        access_token: access_token_value,
+    })
+}
 
 #[rocket::async_trait]
-impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims> FromRequest<'r>
+impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + CoreClaims> FromRequest<'r>
     for OIDCGuard<T>
 {
     type Error = ();
@@ -582,152 +668,98 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
         let cookies = req.cookies();
         let auth = req.rocket().state::<AuthState>().unwrap().clone();
 
-        // Extract issuer information
-        let issuer_data: Option<IssuerData> = cookies
-            .get_private("issuer_data")
-            .and_then(|c| serde_json::from_str(c.value()).ok());
-
-        let issuer = match &issuer_data {
-            Some(data) => &data.issuer,
-            None => {
-                eprintln!("No issuer_data cookie");
-                return Outcome::Forward(Status::Unauthorized);
-            }
+        let data = match iss_alg_from_cookies(&cookies) {
+            Outcome::Success(data) => data,
+            Outcome::Forward(status) => return Outcome::Forward(status),
+            Outcome::Error(e) => return Outcome::Error(e),
         };
+        let (issuer, alg) = (&data.issuer, &data.algorithm);
 
-        let alg = match &issuer_data {
-            Some(data) => &data.algorithm,
-            None => {
-                eprintln!("No issuer_data cookie");
-                return Outcome::Forward(Status::Unauthorized);
-            }
-        };
 
+        if cfg!(debug_assertions) {
+            eprintln!("using issuer: {}", issuer);
+        }
         // Attempt to read access token from cookies
-        let mut access_token_value = cookies
+        // if unset return unauthorized
+        let mut access_token_value = match cookies
             .get_private("access_token")
-            .map(|c| c.value().to_string());
-
-        // Check expiration if token exists
-        let token_needs_refresh = if let Some(ref token_val) = access_token_value {
-            match auth.validator.decode_with_iss_alg::<T>(
-                issuer,
-                &issuer_data.as_ref().unwrap().algorithm,
-                token_val,
-            ) {
-                Ok(data) => {
-                    let exp = OffsetDateTime::from_unix_timestamp(data
-                        .claims.exp()).unwrap_or(OffsetDateTime::now_utc());
-                    exp <= OffsetDateTime::now_utc()
-                }
-                Err(_) => true,
-            }
-        } else {
-            true
-        };
-
-        if !token_needs_refresh {
-            let claims = match auth.validator.decode_with_iss_alg(
-                issuer,
-                alg,
-                access_token_value.as_ref().unwrap(),
-            ) {
-                Ok(claims) => claims,
-                Err(e) => {
-                    eprintln!("failed to decode claims: {e}");
-                    return Outcome::Forward(Status::Unauthorized);
-                }
-            };
-            return Outcome::Success(OIDCGuard {
-                claims: claims.claims,
-                access_token: access_token_value.unwrap(),
-                userinfo: None,
-            });
-        }
-
-        // Get stored refresh token for this issuer
-        let refresh_token_str = {
-            let tokens_guard = auth.tokens.read().await;
-            tokens_guard.get(issuer).cloned()
-        };
-
-        let refresh_token_str = match refresh_token_str {
-            Some(t) => t,
-            None => {
-                eprintln!("No refresh token stored for issuer: {}", issuer);
-                return Outcome::Forward(Status::Unauthorized);
-            }
-        };
-
-        let refresh_token = RefreshToken::new(refresh_token_str.clone());
-
-        // Refresh access token if needed
-        if token_needs_refresh {
-            /*let try_refresh = match auth.client.exchange_refresh_token(&refresh_token).await {
-                Ok(val) => val,
-                Err(e) => {
-                    eprintln!("failed to refresh token {e}");
-                    return Outcome::Forward(Status::Unauthorized);
-                }
-            };*/
-            match auth.client.exchange_refresh_token(&refresh_token).await
-            {
-                Ok(new_token) => {
-                    // Update refresh token if rotated
-                    if let Some(new_refresh) = new_token.refresh_token() {
-                        let mut tokens_guard = auth.tokens.write().await;
-                        tokens_guard.insert(issuer.clone(), new_refresh.secret().to_string());
-                    }
-                    access_token_value = Some(new_token.access_token().secret().to_string());
-                    // Update cookie
-                    cookies.add_private(
-                        Cookie::build(("access_token", access_token_value.clone().unwrap()))
-                            .http_only(true)
-                            .finish(),
-                    );
-                }
-                Err(err) => {
-                    eprintln!("Failed to refresh access token: {:?}", err);
-                    return Outcome::Forward(Status::Unauthorized);
-                }
-            }
-        }
-
-        // Decode access token now
-        let access_token_val = access_token_value.unwrap();
-        let claims = match auth.validator.decode_with_iss_alg::<T>(
-            issuer,
-            &issuer_data.as_ref().unwrap().algorithm,
-            &access_token_val,
-        ) {
-            Ok(data) => data.claims,
-            Err(err) => {
-                eprintln!("Token decode failed: {:?}", err);
-                return Outcome::Forward(Status::Unauthorized);
-            }
-        };
-
-        // Optionally fetch userinfo
-        let userinfo = match auth
-            .client
-            .user_info(
-                AccessToken::new(access_token_val.clone()),
-                None::<SubjectIdentifier>,
-            )
-            .await
+            .map(|c| c.value().to_string())
         {
-            Ok(info) => Some(UserInfo::try_from(info).unwrap()),
-            Err(err) => {
-                eprintln!("Failed to fetch userinfo: {:?}", err);
-                None
+            Some(access_token) => access_token,
+            None => return Outcome::Forward(Status::Unauthorized),
+        };
+        
+        if cfg!(debug_assertions) {
+            println!("old access token in OIDCGuard: {}", access_token_value);
+        }
+        let outcome = parse_oidc_token(&auth, issuer, alg, &access_token_value).await;
+        match outcome {
+            Outcome::Success(data) => {
+                // Update cookie
+                cookies.add_private(
+                    Cookie::build(("access_token", data.access_token.clone()))
+                        .http_only(true)
+                        .finish(),
+                );
+                if cfg!(debug_assertions) {
+                    println!("setting access token after parsing with OIDC: {}", data.access_token);
+                }
+                Outcome::Success(OIDCGuard {
+                    claims: data.claims,
+                    access_token: data.access_token,
+                    userinfo: data.userinfo,
+                })
+            },
+            Outcome::Forward(status) => Outcome::Forward(status),
+            Outcome::Error(e) => Outcome::Error(e),
+        }
+    }
+}
+
+
+#[rocket::async_trait]
+impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + CoreClaims> FromRequest<'r>
+    for OIDCKeyGuard<T>
+{
+    type Error = ();
+
+    async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        let auth = req.rocket().state::<AuthState>().unwrap().clone();
+        let header = req.headers().get_one("Authorization").unwrap_or_default();
+        let api_key = match crate::auth::extract_key_from_authorization_header(header) {
+            Some(key) => key,
+            None => {
+                eprintln!("Authorization header missing or invalid");
+                return Outcome::Forward(Status::Unauthorized);
             }
         };
 
-        Outcome::Success(OIDCGuard {
-            claims,
-            userinfo,
-            access_token: access_token_val,
-        })
+        let data = match crate::auth::get_iss_alg(&api_key) {
+            Some(claims) => claims,
+            None => {
+                eprintln!("no issuer data / IDClaims");
+                return Outcome::Forward(Status::Unauthorized);
+            }
+        };
+
+        let (issuer, alg) = (&data.iss, &data.alg);
+
+        if cfg!(debug_assertions) {
+            eprintln!("using issuer: {}", issuer);
+        }
+
+        let outcome = parse_oidc_token(&auth, issuer, alg, &api_key).await;
+        match outcome {
+            Outcome::Success(data) => {
+                
+                Outcome::Success(OIDCKeyGuard {
+                    claims: data.claims,
+                    access_token: data.access_token,
+                })
+            },
+            Outcome::Forward(status) => Outcome::Forward(status),
+            Outcome::Error(e) => Outcome::Error(e),
+        }
     }
 }
 
@@ -925,6 +957,10 @@ pub fn login(
             .checked_add(Duration::new(3600, 0))
             .expect("failed to add 1 hour"),
     };
+    let issuer_exp = OffsetDateTime::now_utc()
+            .checked_add(Duration::new(3600, 0))
+            .expect("failed to add 1 hour");
+    
     // Add the access_token cookie
     jar.add_private(
         Cookie::build(("access_token", access_token.clone()))
@@ -947,6 +983,7 @@ pub fn login(
         Cookie::build(("issuer_data", issuer_data_json))
             .secure(false)
             .http_only(false) // if you don't want JS access, set to true
+            .expires(issuer_exp)
             .same_site(SameSite::Lax),
     );
 

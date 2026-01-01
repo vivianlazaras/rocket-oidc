@@ -1,5 +1,6 @@
 use crate::AuthState;
 use crate::BaseClaims;
+use crate::OIDCKeyGuard;
 use crate::check_expiration;
 use crate::client::IssuerData;
 use openidconnect::{AuthenticationFlow, CsrfToken, Nonce, Scope};
@@ -37,6 +38,11 @@ pub async fn callback(
     iss: String,
 ) -> Result<Redirect, crate::errors::OIDCError> {
     auth_state.handle_callback(jar, code, iss).await
+}
+
+/// used for an API route to tell a server to fetch / load a refresh token for an access token.
+pub async fn refresh(auth: &State<AuthState>, guard: OIDCKeyGuard<BaseClaims>) {
+    
 }
 
 pub fn get_routes() -> Vec<Route> {

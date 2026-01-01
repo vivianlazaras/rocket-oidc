@@ -8,6 +8,8 @@ use rocket::http::{Cookie, Status};
 use rocket::request::{FromRequest, Outcome};
 use serde::{Serialize, de::DeserializeOwned};
 use std::fmt::Debug;
+use serde_derive::{Deserialize};
+use crate::AuthState;
 
 use crate::client::Validator;
 
@@ -19,10 +21,13 @@ pub struct AuthGuard<T: Serialize + DeserializeOwned + Debug> {
     access_token: String,
 }
 
-struct IDClaims {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub(crate) struct IDClaims {
     pub iss: String,
     pub alg: String,
+    pub exp: i64,
 }
+
 
 impl<T: Serialize + DeserializeOwned + Debug> AuthGuard<T> {
     pub fn access_token(&self) -> &str {
@@ -56,7 +61,8 @@ fn alg_to_string(alg: &jsonwebtoken::Algorithm) -> String {
     }
 }
 
-fn get_iss_alg(token: &str) -> Option<IDClaims> {
+pub(crate) fn get_iss_alg(token: &str) -> Option<IDClaims> {
+    use crate::get_i64;
     let alg = match jsonwebtoken::decode_header(token) {
         Ok(header) => alg_to_string(&header.alg),
         Err(e) => {
@@ -69,11 +75,12 @@ fn get_iss_alg(token: &str) -> Option<IDClaims> {
         Err(_) => return None,
     };
     let iss = claims.get("iss")?.as_str()?.to_string();
+    let exp = get_i64(&claims, "exp").ok()?;
     println!("Extracted iss: {}, alg: {}", iss, alg);
-    Some(IDClaims { iss, alg })
+    Some(IDClaims { iss, alg, exp })
 }
 
-fn extract_key_from_authorization_header(header: &str) -> Option<String> {
+pub(crate) fn extract_key_from_authorization_header(header: &str) -> Option<String> {
     if header.starts_with("Bearer ") {
         Some(header[7..].to_string())
     } else {
@@ -284,14 +291,12 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
 
     async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
         let api_key = req.headers().get_one("Authorization").unwrap_or_default();
+        if cfg!(debug_assertions) {
+            println!("using authorization header: {}", api_key);
+        }
+        let auth = req.rocket().state::<AuthState>().unwrap().clone();
 
-        let validator = req
-            .rocket()
-            .state::<crate::client::Validator>()
-            .expect("validator managed state not found")
-            .clone();
-
-        parse_authorization_header(api_key, &validator)
+        parse_authorization_header(api_key, &auth.validator)
     }
 }
 
