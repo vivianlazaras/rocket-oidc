@@ -77,7 +77,6 @@ fn load_client_secret<P: AsRef<Path>>(secret_file: P) -> Result<ClientSecret, st
     file.read_to_string(&mut contents)?;
     let secret = trim_trailing_whitespace(&contents);
     #[cfg(debug_assertions)]
-    println!("using secret: {}", secret);
     Ok(ClientSecret::new(secret))
 }
 
@@ -346,6 +345,11 @@ fn parse_jwks(
 }
 
 impl Validator {
+    pub fn merge(&mut self, other: Validator) {
+        for (k, v) in other.pubkeys.into_iter() {
+            self.pubkeys.insert(k, v);
+        }
+    }
     /// creates an empty [`Validator`] with the given session config.
     pub fn with_session(session: WorkingSessionConfig) -> Self {
         Self {

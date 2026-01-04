@@ -76,7 +76,6 @@ pub(crate) fn get_iss_alg(token: &str) -> Option<IDClaims> {
     };
     let iss = claims.get("iss")?.as_str()?.to_string();
     let exp = get_i64(&claims, "exp").ok()?;
-    println!("Extracted iss: {}, alg: {}", iss, alg);
     Some(IDClaims { iss, alg, exp })
 }
 
@@ -110,10 +109,7 @@ fn parse_authorization_header<
         }
     };
 
-    println!(
-        "Validating token with iss: {}, alg: {}",
-        idclaims.iss, idclaims.alg
-    );
+    
     match validator.decode_with_iss_alg::<T>(&idclaims.iss, &idclaims.alg, &api_key) {
         Ok(data) => {
             return Outcome::Success(ApiKeyGuard {
@@ -205,8 +201,6 @@ mod tests {
             aud: "test".to_string(),
         };
 
-        println!("validator: {:?}", validator);
-
         let token = signer.sign(&claims).expect("sign token");
         let header = format!("Bearer {}", token);
 
@@ -291,9 +285,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
 
     async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
         let api_key = req.headers().get_one("Authorization").unwrap_or_default();
-        if cfg!(debug_assertions) {
-            println!("using authorization header: {}", api_key);
-        }
+        
         let auth = req.rocket().state::<AuthState>().unwrap().clone();
 
         parse_authorization_header(api_key, &auth.validator)

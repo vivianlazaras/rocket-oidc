@@ -570,7 +570,6 @@ async fn parse_oidc_token<T: Serialize + DeserializeOwned + CoreClaims + Debug +
                 .claims.exp() - 10).unwrap_or(OffsetDateTime::now_utc());
             if exp > OffsetDateTime::now_utc() {
                 // short circuit access token is valid.
-                println!("short circuiting in parse_oidc_token");
                 return Outcome::Success(OIDCData {
                     claims: data.claims,
                     access_token: access_token_value,
@@ -586,7 +585,6 @@ async fn parse_oidc_token<T: Serialize + DeserializeOwned + CoreClaims + Debug +
             true
         },
     };
-    println!("going through refresh cycle");
     // Get stored refresh token for this issuer
     let refresh_token_str = {
         let tokens_guard = auth.tokens.read().await;
@@ -596,6 +594,7 @@ async fn parse_oidc_token<T: Serialize + DeserializeOwned + CoreClaims + Debug +
     let refresh_token_str = match refresh_token_str {
         Some(t) => t,
         None => {
+            
             eprintln!("No refresh token stored for issuer: {}", issuer);
             return Outcome::Forward(Status::Unauthorized);
         }
@@ -917,8 +916,12 @@ impl OIDCConfig {
 pub async fn setup(
     rocket: rocket::Rocket<Build>,
     config: OIDCConfig,
+    merge: Option<Validator>,
 ) -> Result<Rocket<Build>, Box<dyn std::error::Error>> {
-    let auth_state = from_provider_oidc_config(config).await?;
+    let mut auth_state = from_provider_oidc_config(config).await?;
+    if let Some(validator) = merge {
+        auth_state.validator.merge(validator);
+    }
     if cfg!(debug_assertions) {
         println!("using validator: {:?}", auth_state.validator);
     }
