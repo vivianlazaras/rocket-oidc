@@ -160,6 +160,8 @@ use time::OffsetDateTime;
 use tokio::sync::RwLock;
 use utils::*;
 use uuid::Uuid;
+use rand::rngs::OsRng;
+use rand::RngCore;
 
 use openidconnect::AdditionalClaims;
 use openidconnect::*;
@@ -201,6 +203,42 @@ pub fn get_i64(value: &Value, key: &str) -> Result<i64, OIDCError> {
         .ok_or(OIDCError::MissingClaims("exp".to_string()))?)
 }
 
+
+pub fn get_str_or_vec(value: &Value, key: &str) -> Result<Vec<String>, OIDCError> {
+    let v = value
+        .get(key)
+        .ok_or_else(|| OIDCError::MissingClaims(key.to_string()))?;
+
+    match v {
+        Value::String(s) => Ok(vec![s.clone()]),
+
+        Value::Array(arr) => {
+            let mut out = Vec::with_capacity(arr.len());
+
+            for item in arr {
+                match item {
+                    Value::String(s) => out.push(s.clone()),
+                    other => {
+                        return Err(OIDCError::InvalidClaims(format!(
+                            "claim `{}` must be a string or array of strings, found array element of type {}",
+                            key,
+                            other
+                        )));
+                    }
+                }
+            }
+
+            Ok(out)
+        }
+
+        other => Err(OIDCError::InvalidClaims(format!(
+            "claim `{}` must be a string or array of strings, found {}",
+            key,
+            other
+        ))),
+    }
+}
+
 pub(crate) fn sign_session_token(
     claims: &Value,
     session: &WorkingSessionConfig,
@@ -235,6 +273,7 @@ pub struct AuthState {
     pub config: WorkingConfig,
     // a collection of refresh tokens identified by iss
     pub tokens: Arc<RwLock<HashMap<String, String>>>,
+    pub hmac_secret: Vec<u8>,
 }
 
 impl AuthState {
@@ -243,6 +282,7 @@ impl AuthState {
         jar: &CookieJar<'_>,
         code: String,
         issuer: String,
+        route: Option<String>,
     ) -> Result<Redirect, OIDCError> {
         let iss = &issuer;
         // ── 1. Short-circuit if valid access_token exists
@@ -304,9 +344,12 @@ impl AuthState {
         };
 
         // ── 7. Finalize login
-        let redirect = self.config.post_login().to_string();
+        let redirect = match route {
+            Some(route) => route,
+            None => self.config.post_login().to_string(),
+        };
         crate::login(
-            redirect.clone(),
+            redirect,
             jar,
             token_response.access_token().secret().to_string(),
             &issuer,
@@ -762,6 +805,14 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
     }
 }
 
+/// Generate a cryptographically secure random HMAC secret.
+/// 32 bytes is ideal for HMAC-SHA256.
+pub fn generate_hmac_secret() -> Vec<u8> {
+    let mut key = vec![0u8; 32];
+    OsRng.fill_bytes(&mut key);
+    key
+}
+
 /// Builds the authentication state by initializing the OIDC client
 /// and token validator from the given configuration.
 ///
@@ -776,6 +827,7 @@ pub async fn from_provider_oidc_config(
         validator,
         config: (&config).try_into()?,
         tokens: Arc::new(RwLock::new(HashMap::new())),
+        hmac_secret: generate_hmac_secret(),
     })
 }
 

@@ -74,6 +74,7 @@ pub enum OIDCError {
 
     #[error("PKCS1 error: {0}")]
     PKCS1Err(#[from] rsa::pkcs1::Error),
+
     #[error("{0}")]
     Custom(String),
 }

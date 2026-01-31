@@ -10,6 +10,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use std::fmt::Debug;
 use serde_derive::{Deserialize};
 use crate::AuthState;
+use crate::get_str_or_vec;
 
 use crate::client::Validator;
 
@@ -72,11 +73,18 @@ pub(crate) fn get_iss_alg(token: &str) -> Option<IDClaims> {
     };
     let claims: serde_json::Value = match jsonwebtoken::dangerous::insecure_decode(token) {
         Ok(data) => data.claims,
-        Err(_) => return None,
+        Err(e) => {
+            eprintln!("error decoding idclaims for iss: {}", e);
+            return None;
+        },
     };
-    let iss = claims.get("iss")?.as_str()?.to_string();
-    let exp = get_i64(&claims, "exp").ok()?;
-    Some(IDClaims { iss, alg, exp })
+    println!("iss: {:?}", claims.get("iss"));
+    let mut iss = get_str_or_vec(&claims, "iss").expect("failed to get str or vec for iss");
+    let exp = get_i64(&claims, "exp").ok().expect("failed to get expiration");
+    #[cfg(not(debug_assertions))]
+    panic!("this needs to be refactored to have ISS in IDClaims be a Vec");
+
+    Some(IDClaims { iss: iss.pop().expect("this should be fixed to allow IDClaims to store Vec"), alg, exp })
 }
 
 pub(crate) fn extract_key_from_authorization_header(header: &str) -> Option<String> {
