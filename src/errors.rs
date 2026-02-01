@@ -75,6 +75,12 @@ pub enum OIDCError {
     #[error("PKCS1 error: {0}")]
     PKCS1Err(#[from] rsa::pkcs1::Error),
 
+    #[error("missing OIDC client for requested issuer url: {0}")]
+    MissingClient(String),
+
+    #[error("missing provider name when trying to parse OIDC Config")]
+    MissingProviderName,
+
     #[error("{0}")]
     Custom(String),
 }

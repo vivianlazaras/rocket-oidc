@@ -14,6 +14,7 @@ use rand::RngCore;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::path::PathBuf;
 
 use crate::sign::OidcSigner;
 use crate::token::*;
@@ -133,11 +134,51 @@ impl WorkingSessionConfig {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OIDCConfigRef<'a> {
+    pub name: &'a str,
+    pub client_id: &'a str,
+    pub issuer_url: &'a str,
+    pub redirect: &'a str,
+    pub post_login: Option<&'a str>,
+}
+
+impl<'a> OIDCConfigRef<'a> {
+    /// Converts this borrowed `OIDCConfigRef` into an owned `OIDCConfig`.
+    ///
+    /// # Important
+    ///
+    /// The `client_secret` field of the resulting `OIDCConfig` is **intentionally left empty** (`PathBuf::new()`).
+    /// This is because `OIDCConfigRef` does not contain the secret value.  
+    /// If you need a `OIDCConfig` with a real secret, you must explicitly set it after calling `to_owned`,
+    /// for example by loading it from a file or secret store.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let owned_config = borrowed_config.to_owned();
+    /// assert!(owned_config.client_secret.as_os_str().is_empty());
+    /// // Set the secret explicitly if needed:
+    /// // owned_config.client_secret = PathBuf::from("/path/to/secret");
+    /// ```
+    pub fn to_owned(&self) -> OIDCConfig {
+        OIDCConfig {
+            name: self.name.to_owned(),
+            client_id: self.client_id.to_owned(),
+            client_secret: PathBuf::new(),
+            issuer_url: self.issuer_url.to_owned(),
+            redirect: self.redirect.to_owned(),
+            post_login: self.post_login.map(str::to_owned),
+        }
+    }
+}
+
 /// Configuration used internally by the OIDC client to manage static values.
 ///
 /// Contains client credentials and metadata loaded from a higher-level `OIDCConfig`.
 #[derive(Debug, Clone)]
 pub struct WorkingConfig {
+    name: String,
     client_secret: ClientSecret,
     client_id: ClientId,
     issuer_url: IssuerUrl,
@@ -172,6 +213,7 @@ impl WorkingConfig {
     /// * `Ok(WorkingConfig)` on success.
     /// * `Err` if loading or parsing fails.
     pub fn from_oidc_config(config: &OIDCConfig) -> Result<Self, OIDCError> {
+        let name = config.name.clone();
         let client_id = config.client_id.clone();
         let issuer_url = config.issuer_url.clone();
 
@@ -179,7 +221,7 @@ impl WorkingConfig {
         let client_secret = load_client_secret(&config.client_secret)?;
         let issuer_url = IssuerUrl::new(issuer_url)?;
 
-        let session_config = if let Some(session) = &config.session {
+        /*let session_config = if let Some(session) = &config.session {
             let signer = OidcSigner::from_config_path(&session.signing_key_path, "session-key")?;
             let iss = session.issuer_url.clone();
             let session_expiration_seconds = session.expiration_seconds.unwrap_or(3600);
@@ -190,9 +232,10 @@ impl WorkingConfig {
             ))
         } else {
             None
-        };
+        };*/
 
         Ok(Self {
+            name,
             client_id,
             client_secret,
             issuer_url,
@@ -223,7 +266,34 @@ impl WorkingConfig {
             None
         }
     }*/
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 
+    /// Returns a borrowed `OIDCConfigRef` containing the non-secret fields of this config.
+    ///
+    /// # Important
+    ///
+    /// This method **intentionally omits** the `client_secret` field.  
+    /// The resulting `OIDCConfigRef` is safe to pass to templates, logs, or other non-privileged contexts.  
+    /// If you need access to the secret value, use the appropriate method on `OIDCConfig` (e.g., `load_client_secret`).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let ref_config = config.as_oidc_config();
+    /// println!("Redirect URI: {}", ref_config.redirect);
+    /// // ref_config.client_secret does NOT exist here!
+    /// ```
+    pub fn as_oidc_config<'a>(&'a self) -> OIDCConfigRef<'a> {
+        OIDCConfigRef {
+            name: &self.name,
+            issuer_url: self.issuer_url.as_str(),
+            client_id: self.client_id.as_str(),
+            redirect: &self.redirect,
+            post_login: self.post_login.as_ref().map(|s| s.as_str()),
+        }
+    }
     pub fn post_login(&self) -> &str {
         match &self.post_login {
             Some(url) => &url,
@@ -702,6 +772,9 @@ pub struct OIDCClient {
 }
 
 impl OIDCClient {
+    pub fn as_oidc_config<'a>(&'a self) -> OIDCConfigRef<'a> {
+        self.config.as_oidc_config()
+    }
     /// Creates a new `OIDCClient` by dynamically discovering the provider metadata
     /// and preparing a `Validator` to verify tokens.
     ///

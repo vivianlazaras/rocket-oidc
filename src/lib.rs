@@ -10,6 +10,7 @@ use rocket::State;
 use rocket::fs::FileServer;
 use rocket::response::{Redirect, content::RawHtml};
 use rocket_oidc::{OIDCConfig, CoreClaims, OIDCGuard};
+pub mod providers;
 
 #[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -135,14 +136,16 @@ use errors::{OIDCError, UserInfoErr};
 pub use server::sign;
 pub mod token;
 
+use crate::auth::IDClaims;
+use crate::auth::get_iss_alg;
 use crate::client::WorkingConfig;
 use crate::client::WorkingSessionConfig;
 use crate::client::{IssuerData, KeyID};
 use client::{OIDCClient, Validator};
+use rand::RngCore;
+use rand::rngs::OsRng;
 use rocket::http::Cookie;
 use rocket::response::Redirect;
-use crate::auth::get_iss_alg;
-use crate::auth::IDClaims;
 use rocket::{
     Build, Request, Rocket,
     http::Status,
@@ -158,11 +161,11 @@ use std::sync::Arc;
 use time::Duration;
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
+use tokio::sync::RwLockReadGuard;
 use utils::*;
 use uuid::Uuid;
-use rand::rngs::OsRng;
-use rand::RngCore;
 
+use crate::client::OIDCConfigRef;
 use openidconnect::AdditionalClaims;
 use openidconnect::*;
 use rocket::http::CookieJar;
@@ -203,7 +206,6 @@ pub fn get_i64(value: &Value, key: &str) -> Result<i64, OIDCError> {
         .ok_or(OIDCError::MissingClaims("exp".to_string()))?)
 }
 
-
 pub fn get_str_or_vec(value: &Value, key: &str) -> Result<Vec<String>, OIDCError> {
     let v = value
         .get(key)
@@ -221,8 +223,7 @@ pub fn get_str_or_vec(value: &Value, key: &str) -> Result<Vec<String>, OIDCError
                     other => {
                         return Err(OIDCError::InvalidClaims(format!(
                             "claim `{}` must be a string or array of strings, found array element of type {}",
-                            key,
-                            other
+                            key, other
                         )));
                     }
                 }
@@ -233,8 +234,7 @@ pub fn get_str_or_vec(value: &Value, key: &str) -> Result<Vec<String>, OIDCError
 
         other => Err(OIDCError::InvalidClaims(format!(
             "claim `{}` must be a string or array of strings, found {}",
-            key,
-            other
+            key, other
         ))),
     }
 }
@@ -269,14 +269,22 @@ pub(crate) fn sign_session_token(
 #[derive(Clone)]
 pub struct AuthState {
     pub validator: Validator,
-    pub client: OIDCClient,
+    /// issuer_url, OIDCClient key value store.
+    pub client: Arc<RwLock<HashMap<String, OIDCClient>>>,
     pub config: WorkingConfig,
     // a collection of refresh tokens identified by iss
     pub tokens: Arc<RwLock<HashMap<String, String>>>,
-    pub hmac_secret: Vec<u8>,
+    pub(crate) hmac_secret: Vec<u8>,
 }
 
 impl AuthState {
+    pub async fn client_for<'a>(
+        &'a self,
+        issuer_url: &str,
+    ) -> Result<RwLockReadGuard<'a, OIDCClient>, OIDCError> {
+        RwLockReadGuard::try_map(self.client.read().await, |v| v.get(issuer_url))
+            .map_err(|v| OIDCError::MissingClient(issuer_url.to_string()))
+    }
     pub async fn handle_callback(
         &self,
         jar: &CookieJar<'_>,
@@ -291,10 +299,14 @@ impl AuthState {
             let token = cookie.to_string();
             // this should catch invalid signature, and result in refresh.
             if let Some(idclaims) = get_iss_alg(&token) {
-                if let Ok(decoded) = self.validator.decode_with_iss_alg::<BaseClaims>(iss, &idclaims.alg, &token) {
-                    
+                if let Ok(decoded) =
+                    self.validator
+                        .decode_with_iss_alg::<BaseClaims>(iss, &idclaims.alg, &token)
+                {
                     let (_, expired) = check_expiration(&cookie);
-                    if let Ok(exp) = OffsetDateTime::from_unix_timestamp(idclaims.exp) && !expired {
+                    if let Ok(exp) = OffsetDateTime::from_unix_timestamp(idclaims.exp)
+                        && !expired
+                    {
                         if exp > OffsetDateTime::now_utc() {
                             return Ok(Redirect::to(self.config.post_login().to_string()));
                         }
@@ -305,7 +317,8 @@ impl AuthState {
 
         // ── 2. Exchange authorization code for tokens
         let token_response = self
-            .client
+            .client_for(&issuer)
+            .await?
             .exchange_code(AuthorizationCode::new(code))
             .await?;
 
@@ -371,7 +384,8 @@ impl AuthState {
         };
 
         let token_response = self
-            .client
+            .client_for(issuer)
+            .await?
             .exchange_refresh_token(&refresh_token)
             .await?;
 
@@ -591,7 +605,10 @@ fn iss_alg_from_cookies(cookies: &CookieJar<'_>) -> Outcome<IssuerData, ()> {
         }
     };
 
-    Outcome::Success( IssuerData { issuer: issuer.to_string(), algorithm: alg.to_string() })
+    Outcome::Success(IssuerData {
+        issuer: issuer.to_string(),
+        algorithm: alg.to_string(),
+    })
 }
 
 struct OIDCData<T: Serialize + DeserializeOwned + CoreClaims + Debug + Clone> {
@@ -600,34 +617,40 @@ struct OIDCData<T: Serialize + DeserializeOwned + CoreClaims + Debug + Clone> {
     access_token: String,
 }
 
-async fn parse_oidc_token<T: Serialize + DeserializeOwned + CoreClaims + Debug + Clone + Send + Sync>(auth: &AuthState, issuer: &str, alg: &str, access_token: &str) -> Outcome<OIDCData<T>, ()> {
+async fn parse_oidc_token<
+    T: Serialize + DeserializeOwned + CoreClaims + Debug + Clone + Send + Sync,
+>(
+    auth: &AuthState,
+    issuer: &str,
+    alg: &str,
+    access_token: &str,
+) -> Outcome<OIDCData<T>, ()> {
     let mut access_token_value = access_token.to_string();
-    let token_needs_refresh = match auth.validator.decode_with_iss_alg::<T>(
-        issuer,
-        alg,
-        &access_token_value,
-    ) {
-        Ok(data) => {
-            
-            let exp = OffsetDateTime::from_unix_timestamp(data
-                .claims.exp() - 10).unwrap_or(OffsetDateTime::now_utc());
-            if exp > OffsetDateTime::now_utc() {
-                // short circuit access token is valid.
-                return Outcome::Success(OIDCData {
-                    claims: data.claims,
-                    access_token: access_token_value,
-                    userinfo: None,
-                });
-            }else{
+    let token_needs_refresh =
+        match auth
+            .validator
+            .decode_with_iss_alg::<T>(issuer, alg, &access_token_value)
+        {
+            Ok(data) => {
+                let exp = OffsetDateTime::from_unix_timestamp(data.claims.exp() - 10)
+                    .unwrap_or(OffsetDateTime::now_utc());
+                if exp > OffsetDateTime::now_utc() {
+                    // short circuit access token is valid.
+                    return Outcome::Success(OIDCData {
+                        claims: data.claims,
+                        access_token: access_token_value,
+                        userinfo: None,
+                    });
+                } else {
+                    true
+                }
+            }
+            Err(e) => {
+                // this should check if InvalidSignature v ExpiredSignature
+                // if invalid return unauthorized, if expired refresh the token
                 true
             }
-        }
-        Err(e) => {
-            // this should check if InvalidSignature v ExpiredSignature
-            // if invalid return unauthorized, if expired refresh the token
-            true
-        },
-    };
+        };
     // Get stored refresh token for this issuer
     let refresh_token_str = {
         let tokens_guard = auth.tokens.read().await;
@@ -637,17 +660,21 @@ async fn parse_oidc_token<T: Serialize + DeserializeOwned + CoreClaims + Debug +
     let refresh_token_str = match refresh_token_str {
         Some(t) => t,
         None => {
-            
             eprintln!("No refresh token stored for issuer: {}", issuer);
             return Outcome::Forward(Status::Unauthorized);
         }
     };
 
     let refresh_token = RefreshToken::new(refresh_token_str.clone());
-
+    let client = match auth.client_for(issuer).await {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("No oidc client stored for issuer: {}", issuer);
+            return Outcome::Forward(Status::Unauthorized);
+        }
+    };
     // token needs to be refreshed otherwise early return / short circuit would have happened
-    match auth.client.exchange_refresh_token(&refresh_token).await
-    {
+    match client.exchange_refresh_token(&refresh_token).await {
         Ok(new_token) => {
             // Update refresh token if rotated
             if let Some(new_refresh) = new_token.refresh_token() {
@@ -655,7 +682,6 @@ async fn parse_oidc_token<T: Serialize + DeserializeOwned + CoreClaims + Debug +
                 tokens_guard.insert(issuer.to_string(), new_refresh.secret().to_string());
             }
             access_token_value = new_token.access_token().secret().to_string();
-            
         }
         Err(err) => {
             eprintln!("Failed to refresh access token: {:?}", err);
@@ -663,11 +689,10 @@ async fn parse_oidc_token<T: Serialize + DeserializeOwned + CoreClaims + Debug +
         }
     }
 
-    let claims = match auth.validator.decode_with_iss_alg::<T>(
-        issuer,
-        alg,
-        &access_token_value,
-    ) {
+    let claims = match auth
+        .validator
+        .decode_with_iss_alg::<T>(issuer, alg, &access_token_value)
+    {
         Ok(data) => data.claims,
         Err(err) => {
             eprintln!("Token decode failed: {:?}", err);
@@ -676,8 +701,7 @@ async fn parse_oidc_token<T: Serialize + DeserializeOwned + CoreClaims + Debug +
     };
 
     // Optionally fetch userinfo
-    let userinfo = match auth
-        .client
+    let userinfo = match client
         .user_info(
             AccessToken::new(access_token_value.clone()),
             None::<SubjectIdentifier>,
@@ -701,8 +725,8 @@ async fn parse_oidc_token<T: Serialize + DeserializeOwned + CoreClaims + Debug +
 }
 
 #[rocket::async_trait]
-impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + CoreClaims> FromRequest<'r>
-    for OIDCGuard<T>
+impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + CoreClaims>
+    FromRequest<'r> for OIDCGuard<T>
 {
     type Error = ();
 
@@ -717,7 +741,6 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
         };
         let (issuer, alg) = (&data.issuer, &data.algorithm);
 
-
         if cfg!(debug_assertions) {
             eprintln!("using issuer: {}", issuer);
         }
@@ -730,7 +753,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
             Some(access_token) => access_token,
             None => return Outcome::Forward(Status::Unauthorized),
         };
-        
+
         if cfg!(debug_assertions) {
             println!("old access token in OIDCGuard: {}", access_token_value);
         }
@@ -744,24 +767,26 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
                         .finish(),
                 );
                 if cfg!(debug_assertions) {
-                    println!("setting access token after parsing with OIDC: {}", data.access_token);
+                    println!(
+                        "setting access token after parsing with OIDC: {}",
+                        data.access_token
+                    );
                 }
                 Outcome::Success(OIDCGuard {
                     claims: data.claims,
                     access_token: data.access_token,
                     userinfo: data.userinfo,
                 })
-            },
+            }
             Outcome::Forward(status) => Outcome::Forward(status),
             Outcome::Error(e) => Outcome::Error(e),
         }
     }
 }
 
-
 #[rocket::async_trait]
-impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + CoreClaims> FromRequest<'r>
-    for OIDCKeyGuard<T>
+impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + CoreClaims>
+    FromRequest<'r> for OIDCKeyGuard<T>
 {
     type Error = ();
 
@@ -792,13 +817,10 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
 
         let outcome = parse_oidc_token(&auth, issuer, alg, &api_key).await;
         match outcome {
-            Outcome::Success(data) => {
-                
-                Outcome::Success(OIDCKeyGuard {
-                    claims: data.claims,
-                    access_token: data.access_token,
-                })
-            },
+            Outcome::Success(data) => Outcome::Success(OIDCKeyGuard {
+                claims: data.claims,
+                access_token: data.access_token,
+            }),
             Outcome::Forward(status) => Outcome::Forward(status),
             Outcome::Error(e) => Outcome::Error(e),
         }
@@ -821,9 +843,12 @@ pub async fn from_provider_oidc_config(
     config: OIDCConfig,
 ) -> Result<AuthState, Box<dyn std::error::Error>> {
     let (client, validator) = OIDCClient::from_oidc_config(&config).await?;
-
+    let issuer_url = config.issuer_url.clone();
+    let mut clients = HashMap::new();
+    clients.insert(issuer_url, client);
+    let clients = Arc::new(RwLock::new(clients));
     Ok(AuthState {
-        client,
+        client: clients,
         validator,
         config: (&config).try_into()?,
         tokens: Arc::new(RwLock::new(HashMap::new())),
@@ -868,12 +893,12 @@ impl SessionConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OIDCConfig {
+    pub name: String,
     pub client_id: String,
     pub client_secret: PathBuf,
     pub issuer_url: String,
     pub redirect: String,
     pub post_login: Option<String>,
-    pub session: Option<SessionConfig>,
 }
 
 /// please note this is just an example, and should not be used in production builds
@@ -881,12 +906,12 @@ pub struct OIDCConfig {
 impl Default for OIDCConfig {
     fn default() -> OIDCConfig {
         Self {
+            name: "Unnamed OIDC Provider".to_string(),
             client_id: "storyteller".to_string(),
             client_secret: "./secret".into(),
             issuer_url: "http://keycloak.com/realms/master".to_string(),
             redirect: "http://localhost:8000/".to_string(),
             post_login: None,
-            session: None,
         }
     }
 }
@@ -917,6 +942,10 @@ impl OIDCConfig {
     ///
     /// Returns an error if any required variable is missing.
     pub fn from_env() -> Result<Self, OIDCError> {
+        let name = match env::var("OIDC_PROVIDER_NAME") {
+            Ok(name) => name,
+            _ => return Err(OIDCError::MissingProviderName),
+        };
         let client_id = match env::var("CLIENT_ID") {
             Ok(client_id) => client_id,
             _ => return Err(OIDCError::MissingClientId),
@@ -935,24 +964,24 @@ impl OIDCConfig {
             _ => String::from("/profile"),
         };
 
-        let session_signing_key = match env::var("SESSION_SIGNING_KEY") {
-            Ok(path) => Some(PathBuf::from(path)),
-            _ => None,
-        };
-
-        let session_issuer_url = match env::var("SESSION_ISSUER_URL") {
-            Ok(url) => Some(url),
-            _ => None,
-        };
-
         Ok(Self {
+            name,
             client_id,
             client_secret,
             issuer_url,
             redirect,
             post_login: None,
-            session: SessionConfig::from_env(),
         })
+    }
+
+    pub fn as_ref(&self) -> OIDCConfigRef<'_> {
+        OIDCConfigRef {
+            name: &self.name,
+            client_id: &self.client_id,
+            issuer_url: &self.issuer_url,
+            redirect: &self.redirect,
+            post_login: self.post_login.as_deref(),
+        }
     }
 }
 
@@ -1013,9 +1042,9 @@ pub fn login(
             .expect("failed to add 1 hour"),
     };
     let issuer_exp = OffsetDateTime::now_utc()
-            .checked_add(Duration::new(3600, 0))
-            .expect("failed to add 1 hour");
-    
+        .checked_add(Duration::new(3600, 0))
+        .expect("failed to add 1 hour");
+
     // Add the access_token cookie
     jar.add_private(
         Cookie::build(("access_token", access_token.clone()))
@@ -1045,10 +1074,7 @@ pub fn login(
     // Check for request_id cookie
     let redirect_url = if let Some(cookie) = jar.get("request_id") {
         let request_id = cookie.value();
-        format!(
-            "{}?state={}",
-            redirect, request_id
-        )
+        format!("{}?state={}", redirect, request_id)
     } else {
         redirect
     };

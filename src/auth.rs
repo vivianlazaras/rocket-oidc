@@ -1,16 +1,16 @@
 //! This module provides `AuthGuard` which doesn't request user info, but simply validates server public key
 //! this is useful for implementing local only login systems that don't rely on full OIDC support from the authorization server
 
+use crate::AuthState;
 use crate::CoreClaims;
 use crate::client::IssuerData;
+use crate::get_str_or_vec;
 use rocket::Request;
 use rocket::http::{Cookie, Status};
 use rocket::request::{FromRequest, Outcome};
 use serde::{Serialize, de::DeserializeOwned};
+use serde_derive::Deserialize;
 use std::fmt::Debug;
-use serde_derive::{Deserialize};
-use crate::AuthState;
-use crate::get_str_or_vec;
 
 use crate::client::Validator;
 
@@ -28,7 +28,6 @@ pub(crate) struct IDClaims {
     pub alg: String,
     pub exp: i64,
 }
-
 
 impl<T: Serialize + DeserializeOwned + Debug> AuthGuard<T> {
     pub fn access_token(&self) -> &str {
@@ -76,15 +75,23 @@ pub(crate) fn get_iss_alg(token: &str) -> Option<IDClaims> {
         Err(e) => {
             eprintln!("error decoding idclaims for iss: {}", e);
             return None;
-        },
+        }
     };
     println!("iss: {:?}", claims.get("iss"));
     let mut iss = get_str_or_vec(&claims, "iss").expect("failed to get str or vec for iss");
-    let exp = get_i64(&claims, "exp").ok().expect("failed to get expiration");
+    let exp = get_i64(&claims, "exp")
+        .ok()
+        .expect("failed to get expiration");
     #[cfg(not(debug_assertions))]
     panic!("this needs to be refactored to have ISS in IDClaims be a Vec");
 
-    Some(IDClaims { iss: iss.pop().expect("this should be fixed to allow IDClaims to store Vec"), alg, exp })
+    Some(IDClaims {
+        iss: iss
+            .pop()
+            .expect("this should be fixed to allow IDClaims to store Vec"),
+        alg,
+        exp,
+    })
 }
 
 pub(crate) fn extract_key_from_authorization_header(header: &str) -> Option<String> {
@@ -117,7 +124,6 @@ fn parse_authorization_header<
         }
     };
 
-    
     match validator.decode_with_iss_alg::<T>(&idclaims.iss, &idclaims.alg, &api_key) {
         Ok(data) => {
             return Outcome::Success(ApiKeyGuard {
@@ -293,7 +299,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
 
     async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
         let api_key = req.headers().get_one("Authorization").unwrap_or_default();
-        
+
         let auth = req.rocket().state::<AuthState>().unwrap().clone();
 
         parse_authorization_header(api_key, &auth.validator)
