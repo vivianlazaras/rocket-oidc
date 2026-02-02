@@ -352,6 +352,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
                 }
             } else {
                 // Fall back to normal decode
+                #[allow(deprecated)]
                 match validator.decode::<T>(access_token.value()) {
                     Ok(data) => Outcome::Success(AuthGuard {
                         claims: data.claims,

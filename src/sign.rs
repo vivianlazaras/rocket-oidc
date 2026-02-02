@@ -53,9 +53,8 @@
 //!   `aud` and expiry when consuming tokens.
 use crate::utils::*;
 use jsonwebtoken::DecodingKey;
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+use jsonwebtoken::{Algorithm, EncodingKey};
 use serde::Serialize;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// An OpenID Connect (OIDC) JWT signer backed by an encoding key.
 ///
@@ -183,7 +182,7 @@ impl OidcSigner {
         }
 
         // Build JWT header
-        let mut header = jsonwebtoken::Header::new(self.algorithm);
+        let header = jsonwebtoken::Header::new(self.algorithm);
 
         // Encode the JWT
         Ok(jsonwebtoken::encode(&header, &map, &self.key)?)

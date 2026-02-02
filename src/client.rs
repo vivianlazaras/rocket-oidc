@@ -16,11 +16,10 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::PathBuf;
 
-use crate::sign::OidcSigner;
+//use crate::sign::OidcSigner;
 use crate::token::*;
 use crate::utils::*;
 use serde::de::DeserializeOwned;
-use std::collections::HashSet;
 use std::path::Path;
 
 use openidconnect::reqwest;
@@ -81,6 +80,7 @@ fn load_client_secret<P: AsRef<Path>>(secret_file: P) -> Result<ClientSecret, st
     Ok(ClientSecret::new(secret))
 }
 
+/*
 /// Configuration for session token creation and validation.
 /// Used to sign and verify session JWTs.
 #[derive(Debug, Clone)]
@@ -133,6 +133,7 @@ impl WorkingSessionConfig {
         &self.signing_key
     }
 }
+*/
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OIDCConfigRef<'a> {
@@ -183,7 +184,6 @@ pub struct WorkingConfig {
     client_id: ClientId,
     issuer_url: IssuerUrl,
     redirect: String,
-    //session_config: Option<WorkingSessionConfig>,
     post_login: Option<String>,
 }
 
@@ -363,7 +363,6 @@ pub struct Validator {
     // Default issuer URL, used by legacy or simplified decoding methods.
     // Note: this may not always be correct if your validator handles multiple issuers.
     default_iss: String,
-    session: Option<WorkingSessionConfig>,
 }
 
 fn parse_jwks(
@@ -420,14 +419,14 @@ impl Validator {
             self.pubkeys.insert(k, v);
         }
     }
-    /// creates an empty [`Validator`] with the given session config.
-    pub fn with_session(session: WorkingSessionConfig) -> Self {
+    // creates an empty [`Validator`] with the given session config.
+    /*pub fn with_session(session: WorkingSessionConfig) -> Self {
         Self {
             pubkeys: HashMap::new(),
             default_iss: session.issuer_url.clone(),
             session: Some(session),
         }
-    }
+    }*/
     /// Creates a new `Validator` from a single public key.
     ///
     /// This is useful when you already have a known key (for example, configured statically)
@@ -450,7 +449,6 @@ impl Validator {
         let mut validator = Self {
             pubkeys,
             default_iss: url.clone(),
-            session: None,
         };
 
         validator.insert_pubkey(url, audiance, algorithm, public_key)?;
@@ -497,7 +495,6 @@ impl Validator {
         Self {
             pubkeys: HashMap::new(),
             default_iss: "".to_string(),
-            session: None,
         }
     }
 
@@ -512,7 +509,6 @@ impl Validator {
         validation: Validation,
         provider_metadata: &CoreProviderMetadata,
         issuer_url: String,
-        session: Option<WorkingSessionConfig>,
     ) -> Result<Self, OIDCError> {
         let jwks_uri = provider_metadata.jwks_uri().to_string();
 
@@ -521,12 +517,11 @@ impl Validator {
         let mut validator = Self {
             pubkeys: HashMap::new(),
             default_iss: issuer_url,
-            session,
         };
         for (key, value) in keys.into_iter() {
             validator.pubkeys.insert(key, value);
         }
-        if let Some(session) = &validator.session {
+        /*if let Some(session) = &validator.session {
             let keyid = KeyID::new(&session.issuer_url, "RS256");
             let decoding_key = session.signing_key.decoding_key();
             let mut session_validation = Validation::new(Algorithm::RS256);
@@ -538,7 +533,7 @@ impl Validator {
             validator
                 .pubkeys
                 .insert(keyid, Endpoint::new(session_validation, decoding_key));
-        }
+        }*/
         Ok(validator)
     }
 
@@ -829,7 +824,6 @@ impl OIDCClient {
             validation,
             &provider_metadata,
             config.issuer_url.to_string(),
-            None,
         )
         .await?;
 
@@ -969,8 +963,7 @@ impl OIDCClient {
         let validator = Validator::new(
             custom_validation,
             &provider_metadata,
-            config.issuer_url.to_string(),
-            None,
+            config.issuer_url.to_string()
         )
         .await?;
 

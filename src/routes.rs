@@ -1,23 +1,15 @@
 use crate::AuthState;
-use crate::BaseClaims;
-use crate::OIDCKeyGuard;
-use crate::check_expiration;
-use crate::client::IssuerData;
 use base64::Engine;
 use hmac::{Hmac, Mac};
-use openidconnect::RedirectUrl;
 use openidconnect::{AuthenticationFlow, CsrfToken, Nonce, Scope};
-use openidconnect::{AuthorizationCode, OAuth2TokenResponse, core::CoreResponseType};
-use rocket::http::SameSite;
-use rocket::http::{Cookie, CookieJar};
+use openidconnect::core::CoreResponseType;
+use rocket::http::CookieJar;
 /// This Module will contain routes for 3pid verification through OIDC
 use rocket::{Route, State, response::Redirect, routes};
 use serde::Serialize;
 use serde_derive::Deserialize;
 use sha2::Sha256;
-use std::borrow::Cow;
 use std::time::{SystemTime, UNIX_EPOCH};
-use time::OffsetDateTime;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -68,7 +60,7 @@ pub async fn keycloak(auth_state: &State<AuthState>, redirect: Option<String>) -
 
     let client_lock = auth_state.client.read().await;
     let client = client_lock.values().next().unwrap();
-    let mut req = client
+    let req = client
         .client
         .authorize_url(
             AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
@@ -99,7 +91,7 @@ pub async fn authorize(
             );
         }
     };
-    let mut req = client
+    let req = client
         .client
         .authorize_url(
             AuthenticationFlow::<CoreResponseType>::AuthorizationCode,

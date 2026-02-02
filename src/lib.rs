@@ -132,14 +132,11 @@ pub mod utils;
 
 use errors::{OIDCError, UserInfoErr};
 /// Utilities for acting as an OIDC token signer.
-#[cfg(feature = "server")]
-pub use server::sign;
+
 pub mod token;
 
-use crate::auth::IDClaims;
 use crate::auth::get_iss_alg;
 use crate::client::WorkingConfig;
-use crate::client::WorkingSessionConfig;
 use crate::client::{IssuerData, KeyID};
 use client::{OIDCClient, Validator};
 use rand::RngCore;
@@ -152,9 +149,8 @@ use rocket::{
     request::{FromRequest, Outcome},
 };
 use serde::de::DeserializeOwned;
-use serde_json::{Map, Number, Value};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -163,7 +159,6 @@ use time::OffsetDateTime;
 use tokio::sync::RwLock;
 use tokio::sync::RwLockReadGuard;
 use utils::*;
-use uuid::Uuid;
 
 use crate::client::OIDCConfigRef;
 use openidconnect::AdditionalClaims;
@@ -239,6 +234,7 @@ pub fn get_str_or_vec(value: &Value, key: &str) -> Result<Vec<String>, OIDCError
     }
 }
 
+/*
 pub(crate) fn sign_session_token(
     claims: &Value,
     session: &WorkingSessionConfig,
@@ -258,7 +254,7 @@ pub(crate) fn sign_session_token(
     set_str(&mut new_claims, "sid", &new_sid);
     let token = session.signing_key().sign(&new_claims)?;
     Ok((token, new_exp))
-}
+}*/
 
 /// Holds the authentication state used by the application.
 ///
@@ -328,25 +324,13 @@ impl AuthState {
             tokens_guard.insert(iss.clone(), refresh_token.secret().to_string());
         }
 
-        // ── 4. Determine expiration of access token
-        let expires_at = match token_response.expires_in() {
-            Some(expires_in) => OffsetDateTime::now_utc() + expires_in,
-            None => {
-                let token_data = self
-                    .validator
-                    .decode::<Value>(token_response.access_token().secret())?;
-
-                OffsetDateTime::from_unix_timestamp(get_i64(&token_data.claims, "exp")?)
-                    .unwrap_or_else(|_| OffsetDateTime::now_utc())
-            }
-        };
-
         // ── 5. Select algorithm for issuer
         let supported_algs = self
             .validator
             .get_supported_algorithms_for_issuer(&iss)
             .ok_or(OIDCError::MissingIssuerUrl)?;
 
+        // really this should check which alg appears in the validators map, but this should work for now.
         let chosen_alg = if supported_algs.iter().any(|a| a == "RS256") {
             "RS256".to_string()
         } else {
@@ -354,6 +338,20 @@ impl AuthState {
                 .first()
                 .cloned()
                 .ok_or(OIDCError::MissingAlgoForIssuer(iss.clone()))?
+        };
+
+        // ── 4. Determine expiration of access token
+        
+        let expires_at = match token_response.expires_in() {
+            Some(expires_in) => OffsetDateTime::now_utc() + expires_in,
+            None => {
+                let token_data = self
+                    .validator
+                    .decode_with_iss_alg::<Value>(iss, &chosen_alg, token_response.access_token().secret())?;
+
+                OffsetDateTime::from_unix_timestamp(get_i64(&token_data.claims, "exp")?)
+                    .unwrap_or_else(|_| OffsetDateTime::now_utc())
+            }
         };
 
         // ── 7. Finalize login
@@ -746,7 +744,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
         }
         // Attempt to read access token from cookies
         // if unset return unauthorized
-        let mut access_token_value = match cookies
+        let access_token_value = match cookies
             .get_private("access_token")
             .map(|c| c.value().to_string())
         {
@@ -763,8 +761,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
                 // Update cookie
                 cookies.add_private(
                     Cookie::build(("access_token", data.access_token.clone()))
-                        .http_only(true)
-                        .finish(),
+                        .http_only(true),
                 );
                 if cfg!(debug_assertions) {
                     println!(
