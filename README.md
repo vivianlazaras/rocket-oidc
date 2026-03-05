@@ -78,8 +78,16 @@ export CLIENT_SECRET="/path/to/client/secret"
 export REDIRECT_URI="http://callback_url.com/"
 ```
 
+## Contributing
+I welcome any and all contributions, please submit a PR after reading through [CONTRIBUTING.md](./CONTRIBUTING.md)
+
 ## Change Log
 See [CHANGELOG.md](./CHANGELOG.md)
 
+## LICENSE
+This code is licensed under MIT open source license.
+
+See [LICENSE](./LICENSE)
+
 ## Security
-This crate is not audited, and is very much as work in progress, as such its security cannot be garunteed.
+This crate is not audited, and is very much a work in progress, as such its security cannot be garunteed, and should be treated as highly insecure for the time being.
