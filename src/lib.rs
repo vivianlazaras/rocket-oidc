@@ -1,6 +1,8 @@
 #![allow(non_snake_case)]
 #![allow(non_local_definitions)]
-#![allow(unused_variables)]
+#![warn(unused_variables)]
+#![allow(missing_docs)]
+#![deny(unused_imports)]
 /*!
 ```rust
 use serde_derive::{Serialize, Deserialize};
@@ -125,20 +127,25 @@ extern crate rocket;
 use std::fmt::Debug;
 pub mod auth;
 pub mod client;
+pub mod config;
 pub mod errors;
 pub mod routes;
 pub mod sign;
+pub mod token;
 pub mod utils;
 
-use errors::{OIDCError, UserInfoErr};
-/// Utilities for acting as an OIDC token signer.
-
-pub mod token;
-
 use crate::auth::get_iss_alg;
-use crate::client::WorkingConfig;
 use crate::client::{IssuerData, KeyID};
-use client::{OIDCClient, Validator};
+use crate::client::{OIDCClient, Validator};
+use crate::config::OIDCConfig;
+use crate::errors::{OIDCError, UserInfoErr};
+use crate::utils::*;
+
+use std::collections::HashMap;
+use std::env;
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use rand::RngCore;
 use rand::rngs::OsRng;
 use rocket::http::Cookie;
@@ -150,17 +157,12 @@ use rocket::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
-use std::collections::HashMap;
-use std::env;
-use std::path::PathBuf;
-use std::sync::Arc;
+
 use time::Duration;
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
 use tokio::sync::RwLockReadGuard;
-use utils::*;
 
-use crate::client::OIDCConfigRef;
 use openidconnect::AdditionalClaims;
 use openidconnect::*;
 use rocket::http::CookieJar;
@@ -195,7 +197,7 @@ pub fn set_str(value: &mut Value, key: &str, val: &str) {
 
 pub fn get_i64(value: &Value, key: &str) -> Result<i64, OIDCError> {
     Ok(value
-        .get("exp")
+        .get(key)
         .map(|v| v.as_i64())
         .flatten()
         .ok_or(OIDCError::MissingClaims("exp".to_string()))?)
@@ -264,16 +266,21 @@ pub(crate) fn sign_session_token(
 /// - The static OIDC configuration.
 #[derive(Clone)]
 pub struct AuthState {
-    pub validator: Validator,
     /// issuer_url, OIDCClient key value store.
     pub client: Arc<RwLock<HashMap<String, OIDCClient>>>,
-    pub config: WorkingConfig,
     // a collection of refresh tokens identified by iss
     pub tokens: Arc<RwLock<HashMap<String, String>>>,
     pub(crate) hmac_secret: Vec<u8>,
 }
 
 impl AuthState {
+    pub async fn validator<'a>(
+        &'a self,
+        issuer_url: &str,
+    ) -> Result<RwLockReadGuard<'a, Validator>, OIDCError> {
+        RwLockReadGuard::try_map(self.client_for(issuer_url).await?, |v| Some(v.validator()))
+            .map_err(|v| OIDCError::MissingClient(issuer_url.to_string()))
+    }
     pub async fn client_for<'a>(
         &'a self,
         issuer_url: &str,
@@ -281,7 +288,8 @@ impl AuthState {
         RwLockReadGuard::try_map(self.client.read().await, |v| v.get(issuer_url))
             .map_err(|v| OIDCError::MissingClient(issuer_url.to_string()))
     }
-    pub async fn handle_callback(
+
+    pub(crate) async fn handle_callback(
         &self,
         jar: &CookieJar<'_>,
         code: String,
@@ -289,22 +297,30 @@ impl AuthState {
         route: Option<String>,
     ) -> Result<Redirect, OIDCError> {
         let iss = &issuer;
+        let default_post_login = self
+            .client_for(&issuer)
+            .await?
+            .as_oidc_config()
+            .post_login
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "/auth/profiles".to_string());
         // ── 1. Short-circuit if valid access_token exists
         if let Some(cookie) = jar.get_private("access_token") {
             // attempt to decode access token for invalid signature.
             let token = cookie.to_string();
             // this should catch invalid signature, and result in refresh.
             if let Some(idclaims) = get_iss_alg(&token) {
-                if let Ok(decoded) =
-                    self.validator
-                        .decode_with_iss_alg::<BaseClaims>(iss, &idclaims.alg, &token)
+                if self
+                    .validator(&issuer)
+                    .await?
+                    .decode_with_iss_alg::<BaseClaims>(iss, &idclaims.alg, &token).is_ok()
                 {
                     let (_, expired) = check_expiration(&cookie);
                     if let Ok(exp) = OffsetDateTime::from_unix_timestamp(idclaims.exp)
                         && !expired
                     {
                         if exp > OffsetDateTime::now_utc() {
-                            return Ok(Redirect::to(self.config.post_login().to_string()));
+                            return Ok(Redirect::to(default_post_login));
                         }
                     }
                 }
@@ -326,7 +342,9 @@ impl AuthState {
 
         // ── 5. Select algorithm for issuer
         let supported_algs = self
-            .validator
+            .client_for(&issuer)
+            .await?
+            .validator()
             .get_supported_algorithms_for_issuer(&iss)
             .ok_or(OIDCError::MissingIssuerUrl)?;
 
@@ -341,13 +359,18 @@ impl AuthState {
         };
 
         // ── 4. Determine expiration of access token
-        
+
         let expires_at = match token_response.expires_in() {
             Some(expires_in) => OffsetDateTime::now_utc() + expires_in,
             None => {
                 let token_data = self
-                    .validator
-                    .decode_with_iss_alg::<Value>(iss, &chosen_alg, token_response.access_token().secret())?;
+                    .validator(&issuer)
+                    .await?
+                    .decode_with_iss_alg::<Value>(
+                        iss,
+                        &chosen_alg,
+                        token_response.access_token().secret(),
+                    )?;
 
                 OffsetDateTime::from_unix_timestamp(get_i64(&token_data.claims, "exp")?)
                     .unwrap_or_else(|_| OffsetDateTime::now_utc())
@@ -357,7 +380,7 @@ impl AuthState {
         // ── 7. Finalize login
         let redirect = match route {
             Some(route) => route,
-            None => self.config.post_login().to_string(),
+            None => default_post_login,
         };
         crate::login(
             redirect,
@@ -394,6 +417,38 @@ impl AuthState {
         }
 
         Ok(token_response.access_token().secret().to_string())
+    }
+
+    /// Builds the authentication state by initializing the OIDC client
+    /// and token validator from the given configuration.
+    ///
+    /// Returns `AuthState` on success.
+    pub async fn from_oidc_config(config: OIDCConfig) -> Result<AuthState, OIDCError> {
+        Self::from_oidc_configs(vec![config]).await
+    }
+
+    pub async fn from_oidc_configs(configs: Vec<OIDCConfig>) -> Result<Self, OIDCError> {
+        //let (_client, validator) = OIDCClient::from_oidc_config(&config).await?;
+
+        let clients = OIDCClient::from_oidc_configs(&configs).await?;
+
+        let clients = Arc::new(RwLock::new(clients));
+
+        Ok(AuthState {
+            client: clients,
+            tokens: Arc::new(RwLock::new(HashMap::new())),
+            hmac_secret: generate_hmac_secret(),
+        })
+    }
+
+    /// a way to add OIDC providers after the server is already running.
+    pub async fn extend_from_oidc_configs(
+        &self,
+        configs: Vec<OIDCConfig>,
+    ) -> Result<(), OIDCError> {
+        let new_clients = OIDCClient::from_oidc_configs(&configs).await?;
+        self.client.write().await.extend(new_clients);
+        Ok(())
     }
 }
 /// Represents a localized claim value, such as a name or address
@@ -624,31 +679,32 @@ async fn parse_oidc_token<
     access_token: &str,
 ) -> Outcome<OIDCData<T>, ()> {
     let mut access_token_value = access_token.to_string();
-    let token_needs_refresh =
-        match auth
-            .validator
-            .decode_with_iss_alg::<T>(issuer, alg, &access_token_value)
-        {
-            Ok(data) => {
-                let exp = OffsetDateTime::from_unix_timestamp(data.claims.exp() - 10)
-                    .unwrap_or(OffsetDateTime::now_utc());
-                if exp > OffsetDateTime::now_utc() {
-                    // short circuit access token is valid.
-                    return Outcome::Success(OIDCData {
-                        claims: data.claims,
-                        access_token: access_token_value,
-                        userinfo: None,
-                    });
-                } else {
-                    true
-                }
-            }
-            Err(e) => {
-                // this should check if InvalidSignature v ExpiredSignature
-                // if invalid return unauthorized, if expired refresh the token
+    let _token_needs_refresh = match auth
+        .validator(&issuer)
+        .await
+        .expect("failed to get validator")
+        .decode_with_iss_alg::<T>(issuer, alg, &access_token_value)
+    {
+        Ok(data) => {
+            let exp = OffsetDateTime::from_unix_timestamp(data.claims.exp() - 10)
+                .unwrap_or(OffsetDateTime::now_utc());
+            if exp > OffsetDateTime::now_utc() {
+                // short circuit access token is valid.
+                return Outcome::Success(OIDCData {
+                    claims: data.claims,
+                    access_token: access_token_value,
+                    userinfo: None,
+                });
+            } else {
                 true
             }
-        };
+        }
+        Err(_e) => {
+            // this should check if InvalidSignature v ExpiredSignature
+            // if invalid return unauthorized, if expired refresh the token
+            true
+        }
+    };
     // Get stored refresh token for this issuer
     let refresh_token_str = {
         let tokens_guard = auth.tokens.read().await;
@@ -688,7 +744,9 @@ async fn parse_oidc_token<
     }
 
     let claims = match auth
-        .validator
+        .validator(issuer)
+        .await
+        .expect("failed to get validator")
         .decode_with_iss_alg::<T>(issuer, alg, &access_token_value)
     {
         Ok(data) => data.claims,
@@ -760,8 +818,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
             Outcome::Success(data) => {
                 // Update cookie
                 cookies.add_private(
-                    Cookie::build(("access_token", data.access_token.clone()))
-                        .http_only(true),
+                    Cookie::build(("access_token", data.access_token.clone())).http_only(true),
                 );
                 if cfg!(debug_assertions) {
                     println!(
@@ -832,27 +889,6 @@ pub fn generate_hmac_secret() -> Vec<u8> {
     key
 }
 
-/// Builds the authentication state by initializing the OIDC client
-/// and token validator from the given configuration.
-///
-/// Returns `AuthState` on success.
-pub async fn from_provider_oidc_config(
-    config: OIDCConfig,
-) -> Result<AuthState, Box<dyn std::error::Error>> {
-    let (client, validator) = OIDCClient::from_oidc_config(&config).await?;
-    let issuer_url = config.issuer_url.clone();
-    let mut clients = HashMap::new();
-    clients.insert(issuer_url, client);
-    let clients = Arc::new(RwLock::new(clients));
-    Ok(AuthState {
-        client: clients,
-        validator,
-        config: (&config).try_into()?,
-        tokens: Arc::new(RwLock::new(HashMap::new())),
-        hmac_secret: generate_hmac_secret(),
-    })
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct SessionConfig {
     pub signing_key_path: PathBuf,
@@ -888,100 +924,6 @@ impl SessionConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OIDCConfig {
-    pub name: String,
-    pub client_id: String,
-    pub client_secret: PathBuf,
-    pub issuer_url: String,
-    pub redirect: String,
-    pub post_login: Option<String>,
-}
-
-/// please note this is just an example, and should not be used in production builds
-/// rather `from_env` should be used instead.
-impl Default for OIDCConfig {
-    fn default() -> OIDCConfig {
-        Self {
-            name: "Unnamed OIDC Provider".to_string(),
-            client_id: "storyteller".to_string(),
-            client_secret: "./secret".into(),
-            issuer_url: "http://keycloak.com/realms/master".to_string(),
-            redirect: "http://localhost:8000/".to_string(),
-            post_login: None,
-        }
-    }
-}
-
-/// Represents configuration parameters for OpenID Connect authentication.
-///
-/// Typically loaded from environment variables at runtime.
-impl OIDCConfig {
-    /// Returns the URL to redirect to after login has completed.
-    ///
-    /// If `post_login` is set, returns its value; otherwise defaults to `/`.
-    pub fn post_login(&self) -> &str {
-        match &self.post_login {
-            Some(url) => &url,
-            None => "/",
-        }
-    }
-
-    /// Constructs an `OIDCConfig` from environment variables.
-    ///
-    /// Required variables:
-    /// - `CLIENT_ID`: The OAuth2 client identifier.
-    /// - `CLIENT_SECRET`: The OAuth2 client secret.
-    /// - `ISSUER_URL`: The base URL of the OpenID Connect issuer.
-    ///
-    /// Optional variable:
-    /// - `REDIRECT_URL`: Redirect URI after login (defaults to `/profile` if unset).
-    ///
-    /// Returns an error if any required variable is missing.
-    pub fn from_env() -> Result<Self, OIDCError> {
-        let name = match env::var("OIDC_PROVIDER_NAME") {
-            Ok(name) => name,
-            _ => return Err(OIDCError::MissingProviderName),
-        };
-        let client_id = match env::var("CLIENT_ID") {
-            Ok(client_id) => client_id,
-            _ => return Err(OIDCError::MissingClientId),
-        };
-        let client_secret = match env::var("CLIENT_SECRET") {
-            Ok(secret) => secret.into(),
-            _ => return Err(OIDCError::MissingClientSecret),
-        };
-        let issuer_url = match env::var("ISSUER_URL") {
-            Ok(url) => url,
-            _ => return Err(OIDCError::MissingIssuerUrl),
-        };
-
-        let redirect = match env::var("REDIRECT_URL") {
-            Ok(redirect) => redirect,
-            _ => String::from("/profile"),
-        };
-
-        Ok(Self {
-            name,
-            client_id,
-            client_secret,
-            issuer_url,
-            redirect,
-            post_login: None,
-        })
-    }
-
-    pub fn as_ref(&self) -> OIDCConfigRef<'_> {
-        OIDCConfigRef {
-            name: &self.name,
-            client_id: &self.client_id,
-            issuer_url: &self.issuer_url,
-            redirect: &self.redirect,
-            post_login: self.post_login.as_deref(),
-        }
-    }
-}
-
 /// Initializes the Rocket application with OpenID Connect authentication support.
 ///
 /// This function:
@@ -993,18 +935,14 @@ impl OIDCConfig {
 /// Returns the updated Rocket instance, or an error if the setup failed.
 pub async fn setup(
     rocket: rocket::Rocket<Build>,
-    config: OIDCConfig,
-    merge: Option<Validator>,
+    configs: Vec<OIDCConfig>,
 ) -> Result<Rocket<Build>, Box<dyn std::error::Error>> {
-    let mut auth_state = from_provider_oidc_config(config).await?;
-    if let Some(validator) = merge {
-        auth_state.validator.merge(validator);
-    }
+    let auth_state = AuthState::from_oidc_configs(configs).await?;
+
     if cfg!(debug_assertions) {
-        println!("using validator: {:?}", auth_state.validator);
+        //println!("using validator: {:?}", auth_state.validator);
     }
     Ok(rocket
-        .manage(auth_state.validator.clone())
         .manage(auth_state)
         .mount("/auth", routes::get_routes()))
 }

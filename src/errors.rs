@@ -81,6 +81,9 @@ pub enum OIDCError {
     #[error("missing provider name when trying to parse OIDC Config")]
     MissingProviderName,
 
+    #[error("failed to load secret: {0}")]
+    SecretError(#[from] secret_ref::SecretError),
+
     #[error("{0}")]
     Custom(String),
 }

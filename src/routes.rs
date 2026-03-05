@@ -1,8 +1,8 @@
 use crate::AuthState;
 use base64::Engine;
 use hmac::{Hmac, Mac};
-use openidconnect::{AuthenticationFlow, CsrfToken, Nonce, Scope};
 use openidconnect::core::CoreResponseType;
+use openidconnect::{AuthenticationFlow, CsrfToken, Nonce, Scope};
 use rocket::http::CookieJar;
 /// This Module will contain routes for 3pid verification through OIDC
 use rocket::{Route, State, response::Redirect, routes};
@@ -71,7 +71,7 @@ pub async fn keycloak(auth_state: &State<AuthState>, redirect: Option<String>) -
         .add_scope(Scope::new("email".to_string()))
         .add_scope(Scope::new("profile".to_string()));
 
-    let (authorize_url, _csrf_state, _nonce) = req.url();
+    let (authorize_url, csrf_state, _nonce) = req.url();
     Redirect::to(authorize_url.to_string())
 }
 
@@ -134,6 +134,7 @@ fn verify_state(state: &str, secret: &[u8]) -> Result<CsrfState, &'static str> {
     Ok(state)
 }
 
+#[allow(unused_variables)]
 #[get("/callback?<code>&<state>&<iss>&<session_state>")]
 pub async fn callback(
     jar: &CookieJar<'_>,
@@ -143,8 +144,11 @@ pub async fn callback(
     session_state: String,
     iss: String,
 ) -> Result<Redirect, crate::errors::OIDCError> {
-    let state = verify_state(&state, &auth_state.hmac_secret)?;
-    auth_state.handle_callback(jar, code, iss, state.r).await
+    let state = verify_state(&state, &auth_state.hmac_secret).expect("state validation failure");
+    Ok(auth_state
+        .handle_callback(jar, code, iss, state.r)
+        .await
+        .expect("callback handler failure"))
 }
 
 pub fn get_routes() -> Vec<Route> {

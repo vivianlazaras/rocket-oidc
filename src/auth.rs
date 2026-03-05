@@ -5,14 +5,14 @@ use crate::AuthState;
 use crate::CoreClaims;
 use crate::client::IssuerData;
 use crate::get_str_or_vec;
+
+use std::fmt::Debug;
+
 use rocket::Request;
 use rocket::http::{Cookie, Status};
 use rocket::request::{FromRequest, Outcome};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_derive::Deserialize;
-use std::fmt::Debug;
-
-use crate::client::Validator;
 
 /// [`AuthGuard`] is similar to [`crate::OIDCGuard`] except that its built only to parse an access token from a cookie, and doesn't require an OIDCClient
 /// This is useful for testing but probably shouldn't be used in production environments, if you need pure token parsing, [`ApiKeyGuard`] that loads from Bearer field may be preferable, and more semantically correct given this doesn't handle refresh tokens.
@@ -102,11 +102,11 @@ pub(crate) fn extract_key_from_authorization_header(header: &str) -> Option<Stri
     }
 }
 
-fn parse_authorization_header<
+async fn parse_authorization_header<
     T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims,
 >(
     header: &str,
-    validator: &Validator,
+    auth: &AuthState,
 ) -> Outcome<ApiKeyGuard<T>, ()> {
     let api_key = match extract_key_from_authorization_header(header) {
         Some(key) => key,
@@ -124,6 +124,13 @@ fn parse_authorization_header<
         }
     };
 
+    let validator = match auth.validator(&idclaims.iss).await {
+        Ok(validator) => validator,
+        Err(e) => {
+            eprintln!("failed to fetch validator");
+            return Outcome::Forward(Status::Unauthorized);
+        }
+    };
     match validator.decode_with_iss_alg::<T>(&idclaims.iss, &idclaims.alg, &api_key) {
         Ok(data) => {
             return Outcome::Success(ApiKeyGuard {
@@ -302,7 +309,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
 
         let auth = req.rocket().state::<AuthState>().unwrap().clone();
 
-        parse_authorization_header(api_key, &auth.validator)
+        parse_authorization_header(api_key, &auth).await
     }
 }
 
@@ -351,9 +358,18 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
                     }
                 }
             } else {
-                // Fall back to normal decode
-                #[allow(deprecated)]
-                match validator.decode::<T>(access_token.value()) {
+                let idclaims = match get_iss_alg(&access_token.value()) {
+                    Some(claims) => claims,
+                    None => {
+                        eprintln!("Failed to decode token to get iss/alg");
+                        return Outcome::Forward(Status::Unauthorized);
+                    }
+                };
+                match validator.decode_with_iss_alg::<T>(
+                    &idclaims.iss,
+                    &idclaims.alg,
+                    access_token.value(),
+                ) {
                     Ok(data) => Outcome::Success(AuthGuard {
                         claims: data.claims,
                         access_token: access_token.value().to_string(),

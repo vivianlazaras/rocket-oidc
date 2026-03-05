@@ -79,11 +79,7 @@ export REDIRECT_URI="http://callback_url.com/"
 ```
 
 ## Change Log
-1. Refactor so OIDCConfig uses a path to secret rather than storing the secret itself.
-2. Refactor to add client module, and make code more modular.
-3. Added support for token exchange.
-4. Fixed token expiration issue.
-5. Refactor to allow for multiple identity providers.
+See [CHANGELOG.md](./CHANGELOG.md)
 
 ## Security
 This crate is not audited, and is very much as work in progress, as such its security cannot be garunteed.
