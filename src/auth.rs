@@ -7,6 +7,7 @@ use crate::client::{AuthClient, IssuerData, OIDCClient, Validator};
 use crate::config::OIDCConfig;
 use crate::errors::OIDCError;
 use crate::{check_expiration, generate_hmac_secret, get_i64, get_str_or_vec};
+use crate::client::LocalClient;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -441,5 +442,9 @@ impl AuthState {
         let new_clients = AuthClient::from_oidc_configs(&configs).await?;
         self.client.write().await.extend(new_clients);
         Ok(())
+    }
+
+    pub async fn set_local_client(&self, client: LocalClient) {
+        self.client.write().await.insert(String::from("localhost.local"), client.into());
     }
 }

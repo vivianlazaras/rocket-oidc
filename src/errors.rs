@@ -92,6 +92,9 @@ pub enum OIDCError {
     #[error("user info parse error: {0}")]
     UserInfoErr(#[from] UserInfoErr),
 
+    #[error("missing private key path when trying to load LocalClient instance")]
+    MissingPrivateKey,
+
     #[error("{0}")]
     Custom(String),
 }

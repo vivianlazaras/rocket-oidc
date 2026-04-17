@@ -18,6 +18,7 @@ pub struct OIDCConfig {
     pub issuer_url: String,
     pub redirect: String,
     pub post_login: Option<String>,
+    pub privkey: Option<SecretRef>,
 }
 
 /// please note this is just an example, and should not be used in production builds
@@ -31,6 +32,7 @@ impl Default for OIDCConfig {
             issuer_url: "http://keycloak.com/realms/master".to_string(),
             redirect: "http://localhost:8000/".to_string(),
             post_login: None,
+            privkey: None,
         }
     }
 }
@@ -47,6 +49,10 @@ impl OIDCConfig {
             Some(url) => &url,
             None => "/",
         }
+    }
+
+    pub fn privkey(&self) -> &Option<SecretRef> {
+        &self.privkey
     }
 
     /// Constructs an `OIDCConfig` from environment variables.
@@ -83,6 +89,11 @@ impl OIDCConfig {
             _ => String::from("/profile"),
         };
 
+        let privkey = match env::var("SIGNING_KEY") {
+            Ok(secret) => Some(secret.into()),
+            _ => None,
+        };
+
         Ok(Self {
             name,
             client_id,
@@ -90,6 +101,7 @@ impl OIDCConfig {
             issuer_url,
             redirect,
             post_login: None,
+            privkey,
         })
     }
 
@@ -142,6 +154,7 @@ impl<'a> OIDCConfigRef<'a> {
             issuer_url: self.issuer_url.to_owned(),
             redirect: self.redirect.to_owned(),
             post_login: self.post_login.map(str::to_owned),
+            privkey: None,
         }
     }
 }

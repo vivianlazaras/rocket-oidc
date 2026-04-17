@@ -965,6 +965,15 @@ impl LocalClient {
         })
     }
 
+    pub async fn from_config(config: &OIDCConfig) -> Result<Self, OIDCError> {
+        let working = config.try_load().await?;
+        let pem: &secret_ref::SecretRef = config.privkey().as_ref().ok_or(OIDCError::MissingPrivateKey)?;
+        let policy = secret_ref::SecretPolicy::default();
+        let privkey_str = pem.fetch(policy).await?;
+        let signer = OidcSigner::from_x509_pem(privkey_str.expose(), String::from("1"))?;
+        Self::new(working, signer)
+    }
+
     pub fn as_oidc_config<'a>(&'a self) -> OIDCConfigRef<'a> {
         self.config.as_oidc_config()
     }
@@ -1196,5 +1205,11 @@ impl AuthClient {
 impl From<OIDCClient> for AuthClient {
     fn from(client: OIDCClient) -> AuthClient {
         AuthClient::OIDC(client)
+    }
+}
+
+impl From<LocalClient> for AuthClient {
+    fn from(client: LocalClient) -> AuthClient {
+        AuthClient::Local(client)
     }
 }
