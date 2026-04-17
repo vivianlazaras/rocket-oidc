@@ -451,6 +451,7 @@ impl AuthState {
         Ok(())
     }
 }
+
 /// Represents a localized claim value, such as a name or address
 /// that may have an associated language.
 #[derive(Debug, Clone, Serialize, Deserialize)]
