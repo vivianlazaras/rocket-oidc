@@ -31,3 +31,4 @@ time = "0.3.41"
 tokio = "1.45.0"
 url = "2.5.8"
 uuid = { version = "1.18.1", features = ["v4"]}
+chrono = "0.4.44"

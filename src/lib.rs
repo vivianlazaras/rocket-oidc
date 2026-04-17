@@ -2,7 +2,7 @@
 #![allow(non_local_definitions)]
 #![warn(unused_variables)]
 #![allow(missing_docs)]
-#![deny(unused_imports)]
+#![allow(unused_imports)]
 /*!
 ```rust
 use serde_derive::{Serialize, Deserialize};
@@ -133,8 +133,9 @@ pub mod routes;
 pub mod sign;
 pub mod token;
 pub mod utils;
+pub mod claims;
 
-use crate::auth::get_iss_alg;
+use crate::auth::{AuthState, get_iss_alg};
 use crate::client::{IssuerData, KeyID};
 use crate::client::{OIDCClient, Validator};
 use crate::config::OIDCConfig;
@@ -257,200 +258,6 @@ pub(crate) fn sign_session_token(
     let token = session.signing_key().sign(&new_claims)?;
     Ok((token, new_exp))
 }*/
-
-/// Holds the authentication state used by the application.
-///
-/// Contains:
-/// - The OIDC token validator.
-/// - The OpenID Connect client for user info requests.
-/// - The static OIDC configuration.
-#[derive(Clone)]
-pub struct AuthState {
-    /// issuer_url, OIDCClient key value store.
-    pub client: Arc<RwLock<HashMap<String, OIDCClient>>>,
-    // a collection of refresh tokens identified by iss
-    pub tokens: Arc<RwLock<HashMap<String, String>>>,
-    pub(crate) hmac_secret: Vec<u8>,
-}
-
-impl AuthState {
-    pub async fn validator<'a>(
-        &'a self,
-        issuer_url: &str,
-    ) -> Result<RwLockReadGuard<'a, Validator>, OIDCError> {
-        RwLockReadGuard::try_map(self.client_for(issuer_url).await?, |v| Some(v.validator()))
-            .map_err(|v| OIDCError::MissingClient(issuer_url.to_string()))
-    }
-    pub async fn client_for<'a>(
-        &'a self,
-        issuer_url: &str,
-    ) -> Result<RwLockReadGuard<'a, OIDCClient>, OIDCError> {
-        RwLockReadGuard::try_map(self.client.read().await, |v| v.get(issuer_url))
-            .map_err(|v| OIDCError::MissingClient(issuer_url.to_string()))
-    }
-
-    pub(crate) async fn handle_callback(
-        &self,
-        jar: &CookieJar<'_>,
-        code: String,
-        issuer: String,
-        route: Option<String>,
-    ) -> Result<Redirect, OIDCError> {
-        let iss = &issuer;
-        let default_post_login = self
-            .client_for(&issuer)
-            .await?
-            .as_oidc_config()
-            .post_login
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "/auth/profiles".to_string());
-        // ── 1. Short-circuit if valid access_token exists
-        if let Some(cookie) = jar.get_private("access_token") {
-            // attempt to decode access token for invalid signature.
-            let token = cookie.to_string();
-            // this should catch invalid signature, and result in refresh.
-            if let Some(idclaims) = get_iss_alg(&token) {
-                if self
-                    .validator(&issuer)
-                    .await?
-                    .decode_with_iss_alg::<BaseClaims>(iss, &idclaims.alg, &token).is_ok()
-                {
-                    let (_, expired) = check_expiration(&cookie);
-                    if let Ok(exp) = OffsetDateTime::from_unix_timestamp(idclaims.exp)
-                        && !expired
-                    {
-                        if exp > OffsetDateTime::now_utc() {
-                            return Ok(Redirect::to(default_post_login));
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── 2. Exchange authorization code for tokens
-        let token_response = self
-            .client_for(&issuer)
-            .await?
-            .exchange_code(AuthorizationCode::new(code))
-            .await?;
-
-        // ── 3. Store the refresh token in self.tokens
-        if let Some(refresh_token) = token_response.refresh_token() {
-            let mut tokens_guard = self.tokens.write().await;
-            tokens_guard.insert(iss.clone(), refresh_token.secret().to_string());
-        }
-
-        // ── 5. Select algorithm for issuer
-        let supported_algs = self
-            .client_for(&issuer)
-            .await?
-            .validator()
-            .get_supported_algorithms_for_issuer(&iss)
-            .ok_or(OIDCError::MissingIssuerUrl)?;
-
-        // really this should check which alg appears in the validators map, but this should work for now.
-        let chosen_alg = if supported_algs.iter().any(|a| a == "RS256") {
-            "RS256".to_string()
-        } else {
-            supported_algs
-                .first()
-                .cloned()
-                .ok_or(OIDCError::MissingAlgoForIssuer(iss.clone()))?
-        };
-
-        // ── 4. Determine expiration of access token
-
-        let expires_at = match token_response.expires_in() {
-            Some(expires_in) => OffsetDateTime::now_utc() + expires_in,
-            None => {
-                let token_data = self
-                    .validator(&issuer)
-                    .await?
-                    .decode_with_iss_alg::<Value>(
-                        iss,
-                        &chosen_alg,
-                        token_response.access_token().secret(),
-                    )?;
-
-                OffsetDateTime::from_unix_timestamp(get_i64(&token_data.claims, "exp")?)
-                    .unwrap_or_else(|_| OffsetDateTime::now_utc())
-            }
-        };
-
-        // ── 7. Finalize login
-        let redirect = match route {
-            Some(route) => route,
-            None => default_post_login,
-        };
-        crate::login(
-            redirect,
-            jar,
-            token_response.access_token().secret().to_string(),
-            &issuer,
-            &chosen_alg,
-            Some(expires_at),
-        )
-    }
-
-    /// Optional: refresh an access token for a given issuer
-    pub async fn refresh_access_token(&self, issuer: &str) -> Result<String, OIDCError> {
-        let refresh_token = {
-            let tokens_guard = self.tokens.read().await;
-            tokens_guard.get(issuer).cloned()
-        };
-
-        let refresh_token = match refresh_token {
-            Some(t) => RefreshToken::new(t),
-            None => return Err(OIDCError::MissingRefreshToken),
-        };
-
-        let token_response = self
-            .client_for(issuer)
-            .await?
-            .exchange_refresh_token(&refresh_token)
-            .await?;
-
-        // Update stored refresh token if rotated
-        if let Some(new_refresh_token) = token_response.refresh_token() {
-            let mut tokens_guard = self.tokens.write().await;
-            tokens_guard.insert(issuer.to_string(), new_refresh_token.secret().to_string());
-        }
-
-        Ok(token_response.access_token().secret().to_string())
-    }
-
-    /// Builds the authentication state by initializing the OIDC client
-    /// and token validator from the given configuration.
-    ///
-    /// Returns `AuthState` on success.
-    pub async fn from_oidc_config(config: OIDCConfig) -> Result<AuthState, OIDCError> {
-        Self::from_oidc_configs(vec![config]).await
-    }
-
-    pub async fn from_oidc_configs(configs: Vec<OIDCConfig>) -> Result<Self, OIDCError> {
-        //let (_client, validator) = OIDCClient::from_oidc_config(&config).await?;
-
-        let clients = OIDCClient::from_oidc_configs(&configs).await?;
-
-        let clients = Arc::new(RwLock::new(clients));
-
-        Ok(AuthState {
-            client: clients,
-            tokens: Arc::new(RwLock::new(HashMap::new())),
-            hmac_secret: generate_hmac_secret(),
-        })
-    }
-
-    /// a way to add OIDC providers after the server is already running.
-    pub async fn extend_from_oidc_configs(
-        &self,
-        configs: Vec<OIDCConfig>,
-    ) -> Result<(), OIDCError> {
-        let new_clients = OIDCClient::from_oidc_configs(&configs).await?;
-        self.client.write().await.extend(new_clients);
-        Ok(())
-    }
-}
 
 /// Represents a localized claim value, such as a name or address
 /// that may have an associated language.

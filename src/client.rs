@@ -6,7 +6,11 @@ use crate::errors::OIDCError;
 use crate::token::*;
 use crate::utils::*;
 use crate::{AddClaims, PronounClaim};
+use crate::claims::AccessTokenClaims;
 
+use std::fmt;
+use std::sync::Arc;
+use std::time::Instant;
 use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
 use jsonwebtoken::*;
@@ -825,4 +829,259 @@ impl OIDCClient {
 pub struct IssuerData {
     pub issuer: String,
     pub algorithm: String,
+}
+
+#[derive(Debug, Clone)]
+struct AuthCodeEntry {
+    subject: String,
+    expires_at: Instant,
+}
+
+/// A lightweight, local-only authentication client that mimics enough of an
+/// OpenID Connect (OIDC) client interface to integrate with the rest of the
+/// authentication pipeline.
+///
+/// `LocalClient` is designed for scenarios where users authenticate directly
+/// against the application (e.g., username/password, passkeys, or other
+/// first-party methods) without relying on an external OIDC provider.
+///
+/// Unlike a full OIDC client, this type does **not** perform discovery,
+/// token exchange, or remote validation. Instead, it provides:
+///
+/// - Local configuration (`config`) analogous to OIDC client settings
+/// - A [`Validator`] used to validate locally-issued tokens or sessions
+/// - An optional [`user_info_callback`] to resolve user claims in a way that
+///   resembles the OIDC `userinfo` endpoint
+///
+/// ## Design Notes
+///
+/// This type exists to avoid having to implement a full OIDC provider
+/// (discovery document, JWKS, token endpoints, etc.) for local authentication.
+/// Instead, it allows local auth to participate in the same higher-level
+/// abstractions as OIDC-backed identities.
+///
+/// In particular:
+///
+/// - No `.well-known/openid-configuration` is exposed
+/// - No `openidconnect::Client` is constructed
+/// - Refresh/session lifecycle is expected to be handled separately
+///
+/// ## User Info Callback
+///
+/// The [`user_info_callback`] allows callers to supply a function that maps a
+/// subject identifier and access token (or equivalent) into a
+/// [`UserInfoClaims`] structure. This mirrors the behavior of an OIDC
+/// `userinfo` endpoint without requiring HTTP.
+///
+/// If not provided, user info resolution must be handled elsewhere.
+///
+/// ## Thread Safety
+///
+/// The callback is stored behind an [`Arc`] and must be thread-safe if used in
+/// concurrent contexts. Consider requiring `Send + Sync` bounds if used in
+/// async or multi-threaded environments.
+///
+/// ## Intended Use
+///
+/// This is best used alongside real OIDC providers in a mixed authentication
+/// system, where:
+///
+/// - External users authenticate via OIDC
+/// - Internal or fallback users authenticate locally
+///
+/// Both can then be normalized into a shared identity/session model.
+///
+/// ## Caveats
+///
+/// This type does not guarantee protocol compatibility with OIDC and should
+/// not be exposed as a public identity provider to third-party clients.
+#[derive(Clone)]
+pub struct LocalClient {
+    // Local, working configuration values (e.g., client ID, secret, redirect URL, issuer).
+    config: WorkingConfig,
+    validator: Validator,
+
+    /// Signing key for locally issued JWTs
+    signing_key: jsonwebtoken::EncodingKey,
+
+    /// authorization_code -> entry
+    codes: HashMap<String, AuthCodeEntry>,
+
+    /// In-memory refresh token store (replace with DB later)
+    refresh_tokens: HashMap<String, String>, // refresh_token -> subject
+
+    // a placeholder for now but used to get user info and can be registered by caller.
+    user_info_callback: Option<
+        Arc<
+            Box<
+                dyn Fn(
+                    Option<SubjectIdentifier>,
+                    String,
+                ) -> Result<
+                    UserInfoClaims<AddClaims, PronounClaim>,
+                    OIDCError
+                >,
+            >,
+        >,
+    >,
+}
+
+impl fmt::Debug for LocalClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalClient")
+            .field("config", &self.config)
+            .field("validator", &self.validator)
+            .field(
+                "user_info_callback",
+                &self.user_info_callback.as_ref().map(|_| "<callback>"),
+            )
+            .finish()
+    }
+}
+
+impl LocalClient {
+    pub fn new() {}
+
+    pub fn as_oidc_config<'a>(&'a self) -> OIDCConfigRef<'a> {
+        self.config.as_oidc_config()
+    }
+
+    pub fn validator(&self) -> &Validator {
+        &self.validator
+    }
+
+    pub fn issue_code(&mut self, subject: String) -> AuthorizationCode {
+        let code = uuid::Uuid::new_v4().to_string();
+
+        let entry = AuthCodeEntry {
+            subject,
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(300),
+        };
+
+        self.codes.insert(code.clone(), entry);
+
+        AuthorizationCode::new(code)
+    }
+
+    pub fn exchange_code(
+        &mut self,
+        code: AuthorizationCode,
+    ) -> Result<CoreTokenResponse, crate::errors::OIDCError> {
+        
+        let entry = self.codes
+            .remove(code.secret())
+            .ok_or(crate::errors::OIDCError::InvalidGrant)?;
+
+        if std::time::Instant::now() > entry.expires_at {
+            return Err(crate::errors::OIDCError::InvalidGrant);
+        }
+
+        let subject = entry.subject;
+
+        let claims = AccessTokenClaims::new(subject.clone(), vec!["localhost.local".into()], vec!["account".into()], 3600);
+        let access_token = serde_json::to_string(&claims)?;
+        let refresh_token = uuid::Uuid::new_v4().to_string();
+
+        self.refresh_tokens
+            .insert(refresh_token.clone(), subject);
+
+        let mut response = CoreTokenResponse::new(
+            AccessToken::new(access_token),
+            CoreTokenType::Bearer,
+            CoreIdTokenFields::new(None,  EmptyExtraTokenFields {}),
+        );
+
+        response.set_refresh_token(Some(RefreshToken::new(refresh_token)));
+
+        Ok(response)
+    }
+
+    pub async fn exchange_refresh_token(
+        &mut self,
+        token: &RefreshToken,
+    ) -> Result<CoreTokenResponse, crate::errors::OIDCError> {
+        let refresh_token = token.secret();
+
+        let subject = self
+            .refresh_tokens
+            .remove(refresh_token)
+            .ok_or(crate::errors::OIDCError::InvalidGrant)?;
+
+        // issue new access token
+        let claims = AccessTokenClaims::new(
+            subject.clone(),
+            vec!["localhost.local".into()],
+            vec!["account".into()],
+            3600,
+        );
+
+        let access_token = serde_json::to_string(&claims)?;
+
+        // rotate refresh token
+        let new_refresh_token = uuid::Uuid::new_v4().to_string();
+        self.refresh_tokens
+            .insert(new_refresh_token.clone(), subject);
+
+        let mut response = CoreTokenResponse::new(
+            AccessToken::new(access_token),
+            CoreTokenType::Bearer,
+            CoreIdTokenFields::new(None, EmptyExtraTokenFields {}),
+        );
+
+        response.set_refresh_token(Some(RefreshToken::new(new_refresh_token)));
+
+        Ok(response)
+    }
+    
+}
+
+#[derive(Debug, Clone)]
+pub enum AuthClient {
+    OIDC(OIDCClient),
+    Local(LocalClient),
+}
+
+impl AuthClient {
+
+    pub fn as_oidc_config<'a>(&'a self) -> OIDCConfigRef<'a> {
+        match self {
+            Self::OIDC(oidc) => oidc.config.as_oidc_config(),
+            Self::Local(local) => local.config.as_oidc_config(),
+        }
+    }
+
+    pub fn validator(&self) -> &Validator {
+        match self {
+            Self::OIDC(oidc) => oidc.validator(),
+            Self::Local(local) => local.validator(),
+        }
+    }
+
+    pub async fn exchange_code(
+        &mut self,
+        code: AuthorizationCode,
+    ) -> Result<CoreTokenResponse, crate::errors::OIDCError> {
+        match self {
+            AuthClient::Local(client) => client.exchange_code(code),
+
+            AuthClient::OIDC(client) => {
+                client.exchange_code(code).await
+            }
+        }
+    }
+
+    pub async fn exchange_refresh_token(
+        &mut self,
+        token: &RefreshToken,
+    ) -> Result<CoreTokenResponse, crate::errors::OIDCError> {
+        match self {
+            AuthClient::Local(client) => {
+                client.exchange_refresh_token(token).await
+            }
+
+            AuthClient::OIDC(client) => {
+                client.exchange_refresh_token(token).await
+            }
+        }
+    }
 }

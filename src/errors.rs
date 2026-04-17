@@ -84,6 +84,9 @@ pub enum OIDCError {
     #[error("failed to load secret: {0}")]
     SecretError(#[from] secret_ref::SecretError),
 
+    #[error("invalid code grant")]
+    InvalidGrant,
+
     #[error("{0}")]
     Custom(String),
 }

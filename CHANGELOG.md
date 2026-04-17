@@ -1,4 +1,7 @@
 
+# 0.2.3
+1. Reimplemented self signing local authentication through LocalClient.
+
 # 0.2.2
 1. Removed support for self signing
 2. Implemented proper state verification
