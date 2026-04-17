@@ -3,7 +3,7 @@
 
 use crate::BaseClaims;
 use crate::CoreClaims;
-use crate::client::{IssuerData, OIDCClient, Validator};
+use crate::client::{AuthClient, IssuerData, OIDCClient, Validator};
 use crate::config::OIDCConfig;
 use crate::errors::OIDCError;
 use crate::{check_expiration, generate_hmac_secret, get_i64, get_str_or_vec};
@@ -411,7 +411,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
 #[derive(Clone)]
 pub struct AuthState {
     /// issuer_url, OIDCClient key value store.
-    pub client: Arc<RwLock<HashMap<String, OIDCClient>>>,
+    pub client: Arc<RwLock<HashMap<String, AuthClient>>>,
     // a collection of refresh tokens identified by iss
     pub tokens: Arc<RwLock<HashMap<String, String>>>,
     pub(crate) hmac_secret: Vec<u8>,
@@ -428,7 +428,7 @@ impl AuthState {
     pub async fn client_for<'a>(
         &'a self,
         issuer_url: &str,
-    ) -> Result<RwLockReadGuard<'a, OIDCClient>, OIDCError> {
+    ) -> Result<RwLockReadGuard<'a, AuthClient>, OIDCError> {
         RwLockReadGuard::try_map(self.client.read().await, |v| v.get(issuer_url))
             .map_err(|v| OIDCError::MissingClient(issuer_url.to_string()))
     }
@@ -575,7 +575,7 @@ impl AuthState {
     pub async fn from_oidc_configs(configs: Vec<OIDCConfig>) -> Result<Self, OIDCError> {
         //let (_client, validator) = OIDCClient::from_oidc_config(&config).await?;
 
-        let clients = OIDCClient::from_oidc_configs(&configs).await?;
+        let clients = AuthClient::from_oidc_configs(&configs).await?;
 
         let clients = Arc::new(RwLock::new(clients));
 
@@ -591,7 +591,7 @@ impl AuthState {
         &self,
         configs: Vec<OIDCConfig>,
     ) -> Result<(), OIDCError> {
-        let new_clients = OIDCClient::from_oidc_configs(&configs).await?;
+        let new_clients = AuthClient::from_oidc_configs(&configs).await?;
         self.client.write().await.extend(new_clients);
         Ok(())
     }

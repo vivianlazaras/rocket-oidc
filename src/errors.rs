@@ -21,6 +21,8 @@ pub enum UserInfoErr {
     MissingFamilyName,
     #[error("missing profile picture url")]
     MissingPicture,
+    #[error("user info endpoint not set")]
+    MissingEndpoint,
 }
 
 #[derive(Debug, Error)]
@@ -86,6 +88,9 @@ pub enum OIDCError {
 
     #[error("invalid code grant")]
     InvalidGrant,
+
+    #[error("user info parse error: {0}")]
+    UserInfoErr(#[from] UserInfoErr),
 
     #[error("{0}")]
     Custom(String),

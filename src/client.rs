@@ -1,12 +1,12 @@
 use crate::CoreClaims;
+use crate::claims::AccessTokenClaims;
 use crate::config::OIDCConfig;
 use crate::config::OIDCConfigRef;
 use crate::config::WorkingConfig;
-use crate::errors::OIDCError;
+use crate::errors::{OIDCError, UserInfoErr};
 use crate::token::*;
 use crate::utils::*;
 use crate::{AddClaims, PronounClaim};
-use crate::claims::AccessTokenClaims;
 
 use std::fmt;
 use std::sync::Arc;
@@ -27,6 +27,7 @@ use serde::de::DeserializeOwned;
 use openidconnect::reqwest;
 use openidconnect::*;
 use serde::Serialize;
+use tokio::sync::Mutex;
 
 pub type OpenIDClient<
     HasDeviceAuthUrl = EndpointNotSet,
@@ -544,6 +545,25 @@ impl OIDCClient {
     pub fn validator(&self) -> &Validator {
         &self.validator
     }
+
+    pub fn authorize_url<NF, RS, SF>(
+        &self,
+        authentication_flow: AuthenticationFlow<RS>,
+        state_fn: SF,
+        nonce_fn: NF,
+    ) -> (Url, CsrfToken, Nonce)
+    where
+        NF: FnOnce() -> Nonce + 'static,
+        RS: ResponseType,
+        SF: FnOnce() -> CsrfToken + 'static,
+    {
+        self.client
+            .authorize_url(authentication_flow, state_fn, nonce_fn)
+            .add_scope(Scope::new("email".into()))
+            .add_scope(Scope::new("profile".into()))
+            .url()
+    }
+
     /// Creates a new `OIDCClient` by dynamically discovering the provider metadata
     /// and preparing a `Validator` to verify tokens.
     ///
@@ -897,30 +917,23 @@ struct AuthCodeEntry {
 /// not be exposed as a public identity provider to third-party clients.
 #[derive(Clone)]
 pub struct LocalClient {
-    // Local, working configuration values (e.g., client ID, secret, redirect URL, issuer).
     config: WorkingConfig,
     validator: Validator,
-
-    /// Signing key for locally issued JWTs
     signing_key: jsonwebtoken::EncodingKey,
 
-    /// authorization_code -> entry
-    codes: HashMap<String, AuthCodeEntry>,
+    codes: Arc<Mutex<HashMap<String, AuthCodeEntry>>>,
+    refresh_tokens: Arc<Mutex<HashMap<String, String>>>,
 
-    /// In-memory refresh token store (replace with DB later)
-    refresh_tokens: HashMap<String, String>, // refresh_token -> subject
-
-    // a placeholder for now but used to get user info and can be registered by caller.
     user_info_callback: Option<
         Arc<
             Box<
                 dyn Fn(
-                    Option<SubjectIdentifier>,
-                    String,
-                ) -> Result<
-                    UserInfoClaims<AddClaims, PronounClaim>,
-                    OIDCError
-                >,
+                        Option<SubjectIdentifier>,
+                        String,
+                    )
+                        -> Result<UserInfoClaims<AddClaims, PronounClaim>, OIDCError>
+                    + Send
+                    + Sync,
             >,
         >,
     >,
@@ -950,7 +963,42 @@ impl LocalClient {
         &self.validator
     }
 
-    pub fn issue_code(&mut self, subject: String) -> AuthorizationCode {
+    pub fn authorize_url<NF, RS, SF>(
+        &self,
+        _authentication_flow: AuthenticationFlow<RS>,
+        state_fn: SF,
+        nonce_fn: NF,
+    ) -> (Url, CsrfToken, Nonce)
+    where
+        NF: FnOnce() -> Nonce + 'static,
+        RS: ResponseType,
+        SF: FnOnce() -> CsrfToken + 'static,
+    {
+        let state = state_fn();
+        let nonce = nonce_fn();
+
+        let mut url = url::Url::parse(
+            &self.config.redirect, // e.g. "http://localhost:8000"
+        )
+        .unwrap()
+        .join("/authorize")
+        .unwrap();
+
+        {
+            let mut pairs = url.query_pairs_mut();
+
+            pairs.append_pair("client_id", &self.config.client_id);
+            pairs.append_pair("redirect_uri", self.config.redirect.as_str());
+            pairs.append_pair("response_type", "code"); // assuming auth code flow
+            pairs.append_pair("scope", "openid profile email");
+            pairs.append_pair("state", state.secret());
+            pairs.append_pair("nonce", nonce.secret());
+        }
+
+        (url, state, nonce)
+    }
+
+    pub async fn issue_code(&self, subject: String) -> AuthorizationCode {
         let code = uuid::Uuid::new_v4().to_string();
 
         let entry = AuthCodeEntry {
@@ -958,19 +1006,24 @@ impl LocalClient {
             expires_at: std::time::Instant::now() + std::time::Duration::from_secs(300),
         };
 
-        self.codes.insert(code.clone(), entry);
+        {
+            let mut codes = self.codes.lock().await;
+            codes.insert(code.clone(), entry);
+        }
 
         AuthorizationCode::new(code)
     }
 
-    pub fn exchange_code(
-        &mut self,
+    pub async fn exchange_code(
+        &self,
         code: AuthorizationCode,
     ) -> Result<CoreTokenResponse, crate::errors::OIDCError> {
-        
-        let entry = self.codes
-            .remove(code.secret())
-            .ok_or(crate::errors::OIDCError::InvalidGrant)?;
+        let entry = {
+            let mut codes = self.codes.lock().await;
+            codes
+                .remove(code.secret())
+                .ok_or(crate::errors::OIDCError::InvalidGrant)?
+        };
 
         if std::time::Instant::now() > entry.expires_at {
             return Err(crate::errors::OIDCError::InvalidGrant);
@@ -978,17 +1031,25 @@ impl LocalClient {
 
         let subject = entry.subject;
 
-        let claims = AccessTokenClaims::new(subject.clone(), vec!["localhost.local".into()], vec!["account".into()], 3600);
+        let claims = AccessTokenClaims::new(
+            subject.clone(),
+            vec!["localhost.local".into()],
+            vec!["account".into()],
+            3600,
+        );
+
         let access_token = serde_json::to_string(&claims)?;
         let refresh_token = uuid::Uuid::new_v4().to_string();
 
-        self.refresh_tokens
-            .insert(refresh_token.clone(), subject);
+        {
+            let mut tokens = self.refresh_tokens.lock().await;
+            tokens.insert(refresh_token.clone(), subject);
+        }
 
         let mut response = CoreTokenResponse::new(
             AccessToken::new(access_token),
             CoreTokenType::Bearer,
-            CoreIdTokenFields::new(None,  EmptyExtraTokenFields {}),
+            CoreIdTokenFields::new(None, EmptyExtraTokenFields {}),
         );
 
         response.set_refresh_token(Some(RefreshToken::new(refresh_token)));
@@ -997,17 +1058,18 @@ impl LocalClient {
     }
 
     pub async fn exchange_refresh_token(
-        &mut self,
+        &self,
         token: &RefreshToken,
     ) -> Result<CoreTokenResponse, crate::errors::OIDCError> {
         let refresh_token = token.secret();
 
-        let subject = self
-            .refresh_tokens
-            .remove(refresh_token)
-            .ok_or(crate::errors::OIDCError::InvalidGrant)?;
+        let subject = {
+            let mut tokens = self.refresh_tokens.lock().await;
+            tokens
+                .remove(refresh_token)
+                .ok_or(crate::errors::OIDCError::InvalidGrant)?
+        };
 
-        // issue new access token
         let claims = AccessTokenClaims::new(
             subject.clone(),
             vec!["localhost.local".into()],
@@ -1017,10 +1079,12 @@ impl LocalClient {
 
         let access_token = serde_json::to_string(&claims)?;
 
-        // rotate refresh token
         let new_refresh_token = uuid::Uuid::new_v4().to_string();
-        self.refresh_tokens
-            .insert(new_refresh_token.clone(), subject);
+
+        {
+            let mut tokens = self.refresh_tokens.lock().await;
+            tokens.insert(new_refresh_token.clone(), subject);
+        }
 
         let mut response = CoreTokenResponse::new(
             AccessToken::new(access_token),
@@ -1032,7 +1096,13 @@ impl LocalClient {
 
         Ok(response)
     }
-    
+
+    pub fn user_info(&self, access_token: String, subject: Option<SubjectIdentifier>) -> Result<UserInfoClaims<AddClaims, PronounClaim>, OIDCError> {
+        match &self.user_info_callback {
+            Some(callback) => callback(subject, access_token),
+            None => Err(UserInfoErr::MissingEndpoint.into()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1042,7 +1112,6 @@ pub enum AuthClient {
 }
 
 impl AuthClient {
-
     pub fn as_oidc_config<'a>(&'a self) -> OIDCConfigRef<'a> {
         match self {
             Self::OIDC(oidc) => oidc.config.as_oidc_config(),
@@ -1058,30 +1127,64 @@ impl AuthClient {
     }
 
     pub async fn exchange_code(
-        &mut self,
+        &self,
         code: AuthorizationCode,
     ) -> Result<CoreTokenResponse, crate::errors::OIDCError> {
         match self {
-            AuthClient::Local(client) => client.exchange_code(code),
+            AuthClient::Local(client) => client.exchange_code(code).await,
 
-            AuthClient::OIDC(client) => {
-                client.exchange_code(code).await
-            }
+            AuthClient::OIDC(client) => client.exchange_code(code).await,
         }
     }
 
     pub async fn exchange_refresh_token(
-        &mut self,
+        &self,
         token: &RefreshToken,
     ) -> Result<CoreTokenResponse, crate::errors::OIDCError> {
         match self {
-            AuthClient::Local(client) => {
-                client.exchange_refresh_token(token).await
-            }
+            AuthClient::Local(client) => client.exchange_refresh_token(token).await,
 
-            AuthClient::OIDC(client) => {
-                client.exchange_refresh_token(token).await
-            }
+            AuthClient::OIDC(client) => client.exchange_refresh_token(token).await,
         }
+    }
+
+    pub fn authorize_url<NF, RS, SF>(
+        &self,
+        authentication_flow: AuthenticationFlow<RS>,
+        state_fn: SF,
+        nonce_fn: NF,
+    ) -> (Url, CsrfToken, Nonce)
+    where
+        NF: FnOnce() -> Nonce + 'static,
+        RS: ResponseType,
+        SF: FnOnce() -> CsrfToken + 'static,
+    {
+        match self {
+            Self::OIDC(oidc) => oidc.authorize_url(authentication_flow, state_fn, nonce_fn),
+            Self::Local(local) => local.authorize_url(authentication_flow, state_fn, nonce_fn),
+        }
+    }
+
+    pub async fn from_oidc_configs(
+        configs: &[OIDCConfig],
+    ) -> Result<HashMap<String, Self>, OIDCError> {
+        Ok(OIDCClient::from_oidc_configs(configs)
+            .await?
+            .into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect::<HashMap<String, AuthClient>>())
+    }
+
+    pub async fn user_info(&self, access_token: String, subject: Option<SubjectIdentifier>) -> Result<UserInfoClaims<AddClaims, PronounClaim>, OIDCError> {
+        Ok(match self {
+            Self::OIDC(oidc) => oidc.user_info(AccessToken::new(access_token), subject).await.map_err(|e| OIDCError::Custom(e.to_string()))?,
+            Self::Local(local) => local.user_info(access_token, subject)?,
+        })
+    }
+}
+
+impl From<OIDCClient> for AuthClient {
+    fn from(client: OIDCClient) -> AuthClient {
+        AuthClient::OIDC(client)
     }
 }

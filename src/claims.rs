@@ -2,12 +2,11 @@
 
 use crate::string_or_vec;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessTokenClaims {
     // --- Required OIDC / OAuth2 base claims ---
-
     pub exp: i64,
     pub iat: i64,
     pub sub: String,
@@ -19,15 +18,14 @@ pub struct AccessTokenClaims {
     pub aud: Vec<String>,
 
     // --- Identity / profile claims (all optional) ---
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub given_name: Option<String>, // first name
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub given_name: Option<String>,   // first name
+    pub family_name: Option<String>, // last name
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub family_name: Option<String>,  // last name
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,         // full display name (OIDC standard)
+    pub name: Option<String>, // full display name (OIDC standard)
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
@@ -36,10 +34,9 @@ pub struct AccessTokenClaims {
     pub preferred_username: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub picture: Option<String>,      // URL to profile image
+    pub picture: Option<String>, // URL to profile image
 
     // --- Optional custom fields ---
-
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pronouns: Option<String>,
 }

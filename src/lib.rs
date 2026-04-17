@@ -126,6 +126,7 @@ extern crate rocket;
 
 use std::fmt::Debug;
 pub mod auth;
+pub mod claims;
 pub mod client;
 pub mod config;
 pub mod errors;
@@ -133,7 +134,6 @@ pub mod routes;
 pub mod sign;
 pub mod token;
 pub mod utils;
-pub mod claims;
 
 use crate::auth::{AuthState, get_iss_alg};
 use crate::client::{IssuerData, KeyID};
@@ -567,7 +567,7 @@ async fn parse_oidc_token<
     // Optionally fetch userinfo
     let userinfo = match client
         .user_info(
-            AccessToken::new(access_token_value.clone()),
+            access_token_value.clone(),
             None::<SubjectIdentifier>,
         )
         .await

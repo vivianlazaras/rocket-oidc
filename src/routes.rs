@@ -60,18 +60,13 @@ pub async fn keycloak(auth_state: &State<AuthState>, redirect: Option<String>) -
 
     let client_lock = auth_state.client.read().await;
     let client = client_lock.values().next().unwrap();
-    let req = client
-        .client
-        .authorize_url(
-            AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
-            || CsrfToken::new(state),
-            Nonce::new_random,
-        )
-        // This example is requesting access to the the user's profile including email.
-        .add_scope(Scope::new("email".to_string()))
-        .add_scope(Scope::new("profile".to_string()));
+    let req = client.authorize_url(
+        AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
+        || CsrfToken::new(state),
+        Nonce::new_random,
+    );
 
-    let (authorize_url, csrf_state, _nonce) = req.url();
+    let (authorize_url, csrf_state, _nonce) = req;
     Redirect::to(authorize_url.to_string())
 }
 
@@ -91,17 +86,13 @@ pub async fn authorize(
             );
         }
     };
-    let req = client
-        .client
-        .authorize_url(
-            AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
-            || CsrfToken::new(state),
-            Nonce::new_random,
-        )
-        .add_scope(Scope::new("email".to_string()))
-        .add_scope(Scope::new("profile".to_string()));
+    let req = client.authorize_url(
+        AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
+        || CsrfToken::new(state),
+        Nonce::new_random,
+    );
 
-    let (authorize_url, csrf_state, _nonce) = req.url();
+    let (authorize_url, csrf_state, _nonce) = req;
     Redirect::to(authorize_url.to_string())
 }
 
