@@ -11,8 +11,7 @@ use rocket::Build;
 use rocket::State;
 use rocket::fs::FileServer;
 use rocket::response::{Redirect, content::RawHtml};
-use rocket_oidc::{OIDCConfig, CoreClaims, OIDCGuard};
-pub mod providers;
+use rocket_oidc::{config::OIDCConfig, claims::CoreClaims, OIDCGuard};
 
 #[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -37,19 +36,19 @@ impl CoreClaims for UserClaims {
         self.guard.sub.as_str()
     }
 
-    fn issuer(&self) -> &str {
-        self.iss.as_str()
+    fn issuer(&self) -> Vec<String> {
+        vec![self.iss.clone()]
     }
 
-    fn audience(&self) -> &str {
-        self.aud.as_str()
+    fn audience(&self) -> Vec<String> {
+        vec![self.aud.clone()]
     }
 
     fn issued_at(&self) -> i64 {
         self.iat
     }
 
-    fn expiration(&self) -> i64 {
+    fn exp(&self) -> i64 {
         self.exp
     }
 }
@@ -68,7 +67,7 @@ async fn index() -> RawHtml<String> {
 
 #[get("/protected")]
 async fn protected(guard: Guard) -> RawHtml<String> {
-    let userinfo = guard.userinfo;
+    let userinfo = guard.userinfo.unwrap();
     RawHtml(format!("<h1>Hello {} {}</h1>", userinfo.given_name(), userinfo.family_name()))
 }
 
@@ -78,46 +77,9 @@ async fn rocket() -> rocket::Rocket<Build> {
         .mount("/", routes![index])
         .register("/", catchers![unauthorized]);
     let config = OIDCConfig::from_env().unwrap();
-    rocket_oidc::setup(rocket, config)
+    rocket_oidc::setup(rocket, vec![config])
         .await
         .unwrap()
-}
-```
-## Auth Only
-you can use an AuthGuard<Claims> type which only validates the claims in the json web token and doesn't rely on a full OIDC implementation
-```rust
-use rocket_oidc::OIDCConfig;
-use rocket::{catchers, routes, catch, launch, get};
-use jsonwebtoken::DecodingKey;
-
-#[get("/")]
-async fn index() -> &'static str {
-    "Hello, world!"
-}
-
-#[catch(401)]
-fn unauthorized() -> &'static str {
-    "Unauthorized"
-}
-
-#[launch]
-async fn rocket() -> rocket::Rocket<rocket::Build> {
-    let config = OIDCConfig::from_env().unwrap();
-    let decoding_key: DecodingKey = DecodingKey::from_rsa_pem(include_str!("public.pem").as_bytes()).ok().unwrap();
-
-        let validator = rocket_oidc::client::Validator::from_pubkey(
-            config.issuer_url.to_string(),
-            "storyteller".to_string(),
-            "RS256".to_string(),
-            decoding_key,
-        )
-        .unwrap();
-    let mut rocket = rocket::build()
-        .mount("/", routes![index])
-        .manage(validator)
-        .register("/", catchers![unauthorized]);
-
-    rocket
 }
 ```
 */
@@ -141,6 +103,7 @@ use crate::client::{OIDCClient, Validator};
 use crate::config::OIDCConfig;
 use crate::errors::{OIDCError, UserInfoErr};
 use crate::utils::*;
+use crate::claims::CoreClaims;
 
 use std::collections::HashMap;
 use std::env;
@@ -355,16 +318,6 @@ impl CoreClaims for BaseClaims {
     }
 }
 
-/// Trait for extracting the subject identifier from any set of claims.
-/// this is also used as a marker trait
-pub trait CoreClaims: Clone {
-    fn subject(&self) -> &str;
-    fn issuer(&self) -> Vec<String>;
-    fn audience(&self) -> Vec<String>;
-    fn issued_at(&self) -> i64;
-    fn exp(&self) -> i64;
-}
-
 /// this impl intentionally leaks memory and should thus only ever be used for testing
 impl CoreClaims for Value {
     fn subject(&self) -> &str {
@@ -429,15 +382,6 @@ impl<AC: AdditionalClaims, GC: GenderClaim> TryFrom<UserInfoClaims<AC, GC>> for 
         })
     }
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AddClaims {}
-impl AdditionalClaims for AddClaims {}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct PronounClaim {}
-
-impl GenderClaim for PronounClaim {}
 
 fn iss_alg_from_cookies(cookies: &CookieJar<'_>) -> Outcome<IssuerData, ()> {
     // Extract issuer information

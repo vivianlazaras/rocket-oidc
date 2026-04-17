@@ -4,6 +4,18 @@ use crate::string_or_vec;
 
 use serde::{Deserialize, Serialize};
 
+use openidconnect::{GenderClaim, AdditionalClaims};
+
+/// Trait for extracting the subject identifier from any set of claims.
+/// this is also used as a marker trait
+pub trait CoreClaims: Clone {
+    fn subject(&self) -> &str;
+    fn issuer(&self) -> Vec<String>;
+    fn audience(&self) -> Vec<String>;
+    fn issued_at(&self) -> i64;
+    fn exp(&self) -> i64;
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessTokenClaims {
     // --- Required OIDC / OAuth2 base claims ---
@@ -67,3 +79,12 @@ impl AccessTokenClaims {
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddClaims {}
+impl AdditionalClaims for AddClaims {}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PronounClaim {}
+
+impl GenderClaim for PronounClaim {}

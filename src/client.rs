@@ -1,12 +1,12 @@
-use crate::CoreClaims;
-use crate::claims::AccessTokenClaims;
+use crate::sign::OidcSigner;
+use crate::claims::{CoreClaims, AddClaims, PronounClaim, AccessTokenClaims};
 use crate::config::OIDCConfig;
 use crate::config::OIDCConfigRef;
 use crate::config::WorkingConfig;
 use crate::errors::{OIDCError, UserInfoErr};
 use crate::token::*;
 use crate::utils::*;
-use crate::{AddClaims, PronounClaim};
+
 
 use std::fmt;
 use std::sync::Arc;
@@ -919,7 +919,7 @@ struct AuthCodeEntry {
 pub struct LocalClient {
     config: WorkingConfig,
     validator: Validator,
-    signing_key: jsonwebtoken::EncodingKey,
+    signer: OidcSigner,
 
     codes: Arc<Mutex<HashMap<String, AuthCodeEntry>>>,
     refresh_tokens: Arc<Mutex<HashMap<String, String>>>,
@@ -953,7 +953,17 @@ impl fmt::Debug for LocalClient {
 }
 
 impl LocalClient {
-    pub fn new() {}
+    pub fn new(config: WorkingConfig, signer: OidcSigner) -> Result<LocalClient, OIDCError> {
+        let validator = signer.validator("localhost.local", "account")?;
+        Ok(Self {
+            config,
+            signer,
+            validator,
+            codes: Arc::new(Mutex::new(HashMap::new())),
+            refresh_tokens: Arc::new(Mutex::new(HashMap::new())),
+            user_info_callback: None,
+        })
+    }
 
     pub fn as_oidc_config<'a>(&'a self) -> OIDCConfigRef<'a> {
         self.config.as_oidc_config()
@@ -1038,7 +1048,7 @@ impl LocalClient {
             3600,
         );
 
-        let access_token = serde_json::to_string(&claims)?;
+        let access_token = self.signer.sign(&claims)?;
         let refresh_token = uuid::Uuid::new_v4().to_string();
 
         {

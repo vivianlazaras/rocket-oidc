@@ -134,14 +134,6 @@ impl<'a> OIDCConfigRef<'a> {
     /// If you need a `OIDCConfig` with a real secret, you must explicitly set it after calling `to_owned`,
     /// for example by loading it from a file or secret store.
     ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let owned_config = borrowed_config.to_owned();
-    /// assert!(owned_config.client_secret.as_os_str().is_empty());
-    /// // Set the secret explicitly if needed:
-    /// // owned_config.client_secret = PathBuf::from("/path/to/secret");
-    /// ```
     pub fn to_owned(&self) -> OIDCConfig {
         OIDCConfig {
             name: self.name.to_owned(),
@@ -258,13 +250,6 @@ impl WorkingConfig {
     /// The resulting `OIDCConfigRef` is safe to pass to templates, logs, or other non-privileged contexts.  
     /// If you need access to the secret value, use the appropriate method on `OIDCConfig` (e.g., `load_client_secret`).
     ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let ref_config = config.as_oidc_config();
-    /// println!("Redirect URI: {}", ref_config.redirect);
-    /// // ref_config.client_secret does NOT exist here!
-    /// ```
     pub fn as_oidc_config<'a>(&'a self) -> OIDCConfigRef<'a> {
         OIDCConfigRef {
             name: &self.name,

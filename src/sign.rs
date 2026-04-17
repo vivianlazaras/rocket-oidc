@@ -35,6 +35,10 @@
 //! // Claims may be any serde-serializable object that becomes a JSON object.
 //! let claims = json!({
 //!     "sub": "user-123",
+//!     "aud": "account",
+//!     "exp": 45000000,
+//!     "iat": 40000000,
+//!     "iss": "localhost.local",
 //!     "roles": ["admin", "editor"],
 //! });
 //!
@@ -52,6 +56,8 @@
 //!   component to verify tokens and validate standard OIDC claims such as `iss`,
 //!   `aud` and expiry when consuming tokens.
 use crate::utils::*;
+use crate::client::Validator;
+
 use jsonwebtoken::DecodingKey;
 use jsonwebtoken::{Algorithm, EncodingKey};
 use serde::Serialize;
@@ -84,6 +90,10 @@ impl OidcSigner {
             algorithm: Algorithm::RS256,
             pubkey,
         })
+    }
+
+    pub fn validator(&self, issuer: &str, audience: &str) -> Result<Validator, OIDCError> {
+        Validator::from_pubkey(issuer.to_string(), audience.to_string(), serde_json::to_string(&self.algorithm)?, self.pubkey.clone())
     }
 
     pub fn from_config_path(

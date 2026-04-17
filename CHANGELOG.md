@@ -1,6 +1,8 @@
 
 # 0.2.3
 1. Reimplemented self signing local authentication through LocalClient.
+2. Added Validator method to OidcSigner.
+3. Cleaned up tests so critical ones pass.
 
 # 0.2.2
 1. Removed support for self signing
