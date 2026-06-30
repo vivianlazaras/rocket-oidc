@@ -6,10 +6,14 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/*
 /// token provider information.
 pub trait TokenProvider: Clone + Debug {
+    /// the endpoint that signed this token
     fn token_endpoint(&self) -> &str;
+    /// the OIDC client ID associated with the token provider.
     fn client_id(&self) -> &str;
+    /// the OIDC client secret associated this token provider.
     fn client_secret(&self) -> Option<&str>;
 }
 
@@ -68,8 +72,9 @@ impl<P: TokenProvider> SessionBearer<P> {
 
         Ok(access_token)
     }
-}
+}*/
 
+/// used to store the result of a Token Exchange, used principally for exchanging the audience of a token.
 #[derive(Deserialize, Debug)]
 pub struct TokenExchangeResponse {
     access_token: String,
@@ -80,22 +85,25 @@ pub struct TokenExchangeResponse {
 }
 
 impl TokenExchangeResponse {
+    /// returns the underlying access token
     pub fn access_token(&self) -> &str {
         &self.access_token
     }
 
-    pub fn token_type(&self) -> &str {
+    fn token_type(&self) -> &str {
         &self.token_type
     }
 
-    pub fn issued_token_type(&self) -> &Option<String> {
+    fn issued_token_type(&self) -> &Option<String> {
         &self.issued_token_type
     }
 
+    /// returns when the token expires in UNIX epoch
     pub fn expires(&self) -> u64 {
         self.expires_in
     }
 
+    /// returns the scope of the token
     pub fn scope(&self) -> &Option<String> {
         &self.scope
     }

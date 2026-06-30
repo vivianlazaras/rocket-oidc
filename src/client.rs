@@ -4,7 +4,7 @@ use crate::config::OIDCConfig;
 use crate::config::OIDCConfigRef;
 use crate::config::WorkingConfig;
 use crate::errors::{OIDCError, UserInfoErr};
-use crate::token::*;
+use crate::token::TokenExchangeResponse;
 use crate::utils::*;
 
 

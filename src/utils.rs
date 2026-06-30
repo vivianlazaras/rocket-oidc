@@ -73,7 +73,7 @@ pub fn decoding_key_from_private_pem(private_pem: &str) -> Result<DecodingKey, O
     Ok(DecodingKey::from_rsa_pem(public_pem.as_bytes())?)
 }
 
-pub fn check_expiration(cookie: &Cookie<'_>) -> (Option<OffsetDateTime>, bool) {
+pub(crate) fn check_expiration(cookie: &Cookie<'_>) -> (Option<OffsetDateTime>, bool) {
     match cookie.expires() {
         Some(Expiration::Session) => (None, false),
         Some(Expiration::DateTime(offset)) => {
@@ -88,6 +88,6 @@ pub fn check_expiration(cookie: &Cookie<'_>) -> (Option<OffsetDateTime>, bool) {
     }
 }
 
-pub fn hashset_from<T: std::cmp::Eq + std::hash::Hash>(vals: Vec<T>) -> HashSet<T> {
+pub(crate) fn hashset_from<T: std::cmp::Eq + std::hash::Hash>(vals: Vec<T>) -> HashSet<T> {
     vals.into_iter().collect()
 }

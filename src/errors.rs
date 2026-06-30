@@ -14,6 +14,7 @@ pub type TokenErr = RequestTokenError<
 
 /// Errors that can occur when parsing or converting user info claims.
 #[derive(Debug, Clone, Error)]
+#[allow(missing_docs)]
 pub enum UserInfoErr {
     #[error("missing given name")]
     MissingGivenName,
@@ -26,6 +27,7 @@ pub enum UserInfoErr {
 }
 
 #[derive(Debug, Error)]
+#[allow(missing_docs)]
 pub enum OIDCError {
     #[error("IO Error: {0}")]
     IO(#[from] std::io::Error),

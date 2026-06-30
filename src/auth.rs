@@ -142,7 +142,7 @@ async fn parse_authorization_header<
     let validator = match auth.validator(&idclaims.iss).await {
         Ok(validator) => validator,
         Err(e) => {
-            eprintln!("failed to fetch validator");
+            eprintln!("failed to fetch validator {e}");
             return Outcome::Forward(Status::Unauthorized);
         }
     };

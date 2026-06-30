@@ -79,7 +79,7 @@ pub async fn authorize(
     let state = build_state(redirect, &auth_state.hmac_secret);
     let client = match auth_state.client_for(&issuer_url).await {
         Ok(lock) => lock,
-        Err(e) => {
+        Err(_e) => {
             panic!(
                 "error occured trying to fetch client for issuer: {}",
                 issuer_url

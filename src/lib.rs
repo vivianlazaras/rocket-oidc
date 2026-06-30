@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 #![allow(non_local_definitions)]
 #![warn(unused_variables)]
-#![allow(missing_docs)]
+#![warn(missing_docs)]
 #![allow(unused_imports)]
 /*!
 ```rust
@@ -475,7 +475,7 @@ async fn parse_oidc_token<
     let client = match auth.client_for(issuer).await {
         Ok(client) => client,
         Err(e) => {
-            eprintln!("No oidc client stored for issuer: {}", issuer);
+            eprintln!("No oidc client stored for issuer: {}, {}", issuer, e);
             return Outcome::Forward(Status::Unauthorized);
         }
     };
