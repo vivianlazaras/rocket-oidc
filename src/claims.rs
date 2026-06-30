@@ -4,7 +4,7 @@ use crate::string_or_vec;
 
 use serde::{Deserialize, Serialize};
 
-use openidconnect::{GenderClaim, AdditionalClaims};
+use openidconnect::{AdditionalClaims, GenderClaim};
 
 /// Trait for extracting the subject identifier from any set of claims.
 /// this is also used as a marker trait

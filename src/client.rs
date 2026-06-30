@@ -1,12 +1,11 @@
-use crate::sign::OidcSigner;
-use crate::claims::{CoreClaims, AddClaims, PronounClaim, AccessTokenClaims};
+use crate::claims::{AccessTokenClaims, AddClaims, CoreClaims, PronounClaim};
 use crate::config::OIDCConfig;
 use crate::config::OIDCConfigRef;
 use crate::config::WorkingConfig;
 use crate::errors::{OIDCError, UserInfoErr};
+use crate::sign::OidcSigner;
 use crate::token::TokenExchangeResponse;
 use crate::utils::*;
-
 
 use std::fmt;
 use std::sync::Arc;
@@ -967,7 +966,10 @@ impl LocalClient {
 
     pub async fn from_config(config: &OIDCConfig) -> Result<Self, OIDCError> {
         let working = config.try_load().await?;
-        let pem: &secret_ref::SecretRef = config.privkey().as_ref().ok_or(OIDCError::MissingPrivateKey)?;
+        let pem: &secret_ref::SecretRef = config
+            .privkey()
+            .as_ref()
+            .ok_or(OIDCError::MissingPrivateKey)?;
         let policy = secret_ref::SecretPolicy::default();
         let privkey_str = pem.fetch(policy).await?;
         let signer = OidcSigner::from_x509_pem(privkey_str.expose(), String::from("1"))?;
@@ -1116,7 +1118,11 @@ impl LocalClient {
         Ok(response)
     }
 
-    pub fn user_info(&self, access_token: String, subject: Option<SubjectIdentifier>) -> Result<UserInfoClaims<AddClaims, PronounClaim>, OIDCError> {
+    pub fn user_info(
+        &self,
+        access_token: String,
+        subject: Option<SubjectIdentifier>,
+    ) -> Result<UserInfoClaims<AddClaims, PronounClaim>, OIDCError> {
         match &self.user_info_callback {
             Some(callback) => callback(subject, access_token),
             None => Err(UserInfoErr::MissingEndpoint.into()),
@@ -1126,8 +1132,8 @@ impl LocalClient {
 
 #[derive(Debug, Clone)]
 pub enum AuthClient {
-    OIDC(OIDCClient),
-    Local(LocalClient),
+    OIDC(Box<OIDCClient>),
+    Local(Box<LocalClient>),
 }
 
 impl AuthClient {
@@ -1194,9 +1200,16 @@ impl AuthClient {
             .collect::<HashMap<String, AuthClient>>())
     }
 
-    pub async fn user_info(&self, access_token: String, subject: Option<SubjectIdentifier>) -> Result<UserInfoClaims<AddClaims, PronounClaim>, OIDCError> {
+    pub async fn user_info(
+        &self,
+        access_token: String,
+        subject: Option<SubjectIdentifier>,
+    ) -> Result<UserInfoClaims<AddClaims, PronounClaim>, OIDCError> {
         Ok(match self {
-            Self::OIDC(oidc) => oidc.user_info(AccessToken::new(access_token), subject).await.map_err(|e| OIDCError::Custom(e.to_string()))?,
+            Self::OIDC(oidc) => oidc
+                .user_info(AccessToken::new(access_token), subject)
+                .await
+                .map_err(|e| OIDCError::Custom(e.to_string()))?,
             Self::Local(local) => local.user_info(access_token, subject)?,
         })
     }
@@ -1204,12 +1217,12 @@ impl AuthClient {
 
 impl From<OIDCClient> for AuthClient {
     fn from(client: OIDCClient) -> AuthClient {
-        AuthClient::OIDC(client)
+        AuthClient::OIDC(Box::new(client))
     }
 }
 
 impl From<LocalClient> for AuthClient {
     fn from(client: LocalClient) -> AuthClient {
-        AuthClient::Local(client)
+        AuthClient::Local(Box::new(client))
     }
 }

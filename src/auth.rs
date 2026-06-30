@@ -3,11 +3,11 @@
 
 use crate::BaseClaims;
 use crate::CoreClaims;
+use crate::client::LocalClient;
 use crate::client::{AuthClient, IssuerData, Validator};
 use crate::config::OIDCConfig;
 use crate::errors::OIDCError;
 use crate::{check_expiration, generate_hmac_secret, get_i64, get_str_or_vec};
-use crate::client::LocalClient;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -108,8 +108,8 @@ pub(crate) fn get_iss_alg(token: &str) -> Option<IDClaims> {
 }
 
 pub(crate) fn extract_key_from_authorization_header(header: &str) -> Option<String> {
-    if header.starts_with("Bearer ") {
-        Some(header[7..].to_string())
+    if let Some(stripped) = header.strip_prefix("Bearer ") {
+        Some(stripped.to_string())
     } else {
         None
     }
@@ -145,12 +145,10 @@ async fn parse_authorization_header<
         }
     };
     match validator.decode_with_iss_alg::<T>(&idclaims.iss, &idclaims.alg, &api_key) {
-        Ok(data) => {
-            Outcome::Success(ApiKeyGuard {
-                claims: data.claims,
-                access_token: api_key.to_string(),
-            })
-        }
+        Ok(data) => Outcome::Success(ApiKeyGuard {
+            claims: data.claims,
+            access_token: api_key.to_string(),
+        }),
         Err(err) => {
             eprintln!("API key invalid with iss/alg: {}", err);
             Outcome::Forward(Status::Unauthorized)
@@ -305,14 +303,15 @@ impl AuthState {
                     .await?
                     .decode_with_iss_alg::<BaseClaims>(iss, &idclaims.alg, &token)
                     .is_ok()
+            {
+                let (_, expired) = check_expiration(&cookie);
+                if let Ok(exp) = OffsetDateTime::from_unix_timestamp(idclaims.exp)
+                    && !expired
+                    && exp > OffsetDateTime::now_utc()
                 {
-                    let (_, expired) = check_expiration(&cookie);
-                    if let Ok(exp) = OffsetDateTime::from_unix_timestamp(idclaims.exp)
-                        && !expired
-                        && exp > OffsetDateTime::now_utc() {
-                            return Ok(Redirect::to(default_post_login));
-                        }
+                    return Ok(Redirect::to(default_post_login));
                 }
+            }
         }
 
         // ── 2. Exchange authorization code for tokens
@@ -440,6 +439,9 @@ impl AuthState {
     }
 
     pub async fn set_local_client(&self, client: LocalClient) {
-        self.client.write().await.insert(String::from("localhost.local"), client.into());
+        self.client
+            .write()
+            .await
+            .insert(String::from("localhost.local"), client.into());
     }
 }

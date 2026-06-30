@@ -98,12 +98,12 @@ pub mod sign;
 pub mod token;
 pub mod utils;
 
-use crate::auth::{AuthState};
+use crate::auth::AuthState;
+use crate::claims::CoreClaims;
 use crate::client::{IssuerData, KeyID};
 use crate::config::OIDCConfig;
 use crate::errors::{OIDCError, UserInfoErr};
 use crate::utils::*;
-use crate::claims::CoreClaims;
 
 use std::env;
 use std::path::PathBuf;
@@ -505,10 +505,7 @@ async fn parse_oidc_token<
 
     // Optionally fetch userinfo
     let userinfo = match client
-        .user_info(
-            access_token_value.clone(),
-            None::<SubjectIdentifier>,
-        )
+        .user_info(access_token_value.clone(), None::<SubjectIdentifier>)
         .await
     {
         Ok(info) => Some(UserInfo::try_from(info).unwrap()),

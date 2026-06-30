@@ -1,4 +1,3 @@
-
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
