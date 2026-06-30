@@ -1,10 +1,8 @@
-use crate::CoreClaims;
+
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /*
 /// token provider information.
@@ -90,11 +88,13 @@ impl TokenExchangeResponse {
         &self.access_token
     }
 
-    fn token_type(&self) -> &str {
+    /// the type of token before exchange
+    pub fn token_type(&self) -> &str {
         &self.token_type
     }
 
-    fn issued_token_type(&self) -> &Option<String> {
+    /// the type of token reissued
+    pub fn issued_token_type(&self) -> &Option<String> {
         &self.issued_token_type
     }
 

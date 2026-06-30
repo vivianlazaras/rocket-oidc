@@ -2,7 +2,7 @@ use crate::AuthState;
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use openidconnect::core::CoreResponseType;
-use openidconnect::{AuthenticationFlow, CsrfToken, Nonce, Scope};
+use openidconnect::{AuthenticationFlow, CsrfToken, Nonce};
 use rocket::http::CookieJar;
 /// This Module will contain routes for 3pid verification through OIDC
 use rocket::{Route, State, response::Redirect, routes};

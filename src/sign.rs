@@ -57,6 +57,8 @@
 //!   `aud` and expiry when consuming tokens.
 use crate::utils::*;
 use crate::client::Validator;
+use crate::errors::OIDCError;
+
 
 use jsonwebtoken::DecodingKey;
 use jsonwebtoken::{Algorithm, EncodingKey};
@@ -204,15 +206,7 @@ impl OidcSigner {
         Ok(jsonwebtoken::encode(&header, &map, &self.key)?)
     }
 }
-
-use rand::rngs::OsRng;
-use rsa::{
-    RsaPrivateKey,
-    pkcs8::{EncodePrivateKey, EncodePublicKey},
-};
-
-use crate::errors::OIDCError;
-
+/*
 /// this is a testing function used to test sign / decode round trip
 pub(crate) fn generate_rsa_pkcs8_pair() -> (String, String) {
     // Generate a 2048-bit RSA private key
@@ -232,7 +226,7 @@ pub(crate) fn generate_rsa_pkcs8_pair() -> (String, String) {
         .expect("failed to encode public key");
 
     (private_key_pem.to_string(), public_key_pem)
-}
+}*/
 
 #[cfg(test)]
 pub(crate) mod tests {

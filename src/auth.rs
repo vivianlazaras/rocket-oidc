@@ -3,7 +3,7 @@
 
 use crate::BaseClaims;
 use crate::CoreClaims;
-use crate::client::{AuthClient, IssuerData, OIDCClient, Validator};
+use crate::client::{AuthClient, IssuerData, Validator};
 use crate::config::OIDCConfig;
 use crate::errors::OIDCError;
 use crate::{check_expiration, generate_hmac_secret, get_i64, get_str_or_vec};

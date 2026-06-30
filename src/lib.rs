@@ -1,8 +1,9 @@
-#![allow(non_snake_case)]
-#![allow(non_local_definitions)]
-#![warn(unused_variables)]
-#![warn(missing_docs)]
-#![allow(unused_imports)]
+#![deny(non_snake_case)]
+#![deny(non_local_definitions)]
+#![deny(unused_variables)]
+#![allow(missing_docs)]
+#![deny(unused_imports)]
+#![deny(dead_code)]
 /*!
 ```rust
 use serde_derive::{Serialize, Deserialize};
@@ -97,18 +98,15 @@ pub mod sign;
 pub mod token;
 pub mod utils;
 
-use crate::auth::{AuthState, get_iss_alg};
+use crate::auth::{AuthState};
 use crate::client::{IssuerData, KeyID};
-use crate::client::{OIDCClient, Validator};
 use crate::config::OIDCConfig;
 use crate::errors::{OIDCError, UserInfoErr};
 use crate::utils::*;
 use crate::claims::CoreClaims;
 
-use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use rand::RngCore;
 use rand::rngs::OsRng;
@@ -124,8 +122,6 @@ use serde_json::{Map, Value};
 
 use time::Duration;
 use time::OffsetDateTime;
-use tokio::sync::RwLock;
-use tokio::sync::RwLockReadGuard;
 
 use openidconnect::AdditionalClaims;
 use openidconnect::*;
