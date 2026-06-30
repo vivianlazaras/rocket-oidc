@@ -271,14 +271,14 @@ impl AuthState {
         issuer_url: &str,
     ) -> Result<RwLockReadGuard<'a, Validator>, OIDCError> {
         RwLockReadGuard::try_map(self.client_for(issuer_url).await?, |v| Some(v.validator()))
-            .map_err(|v| OIDCError::MissingClient(issuer_url.to_string()))
+            .map_err(|_v| OIDCError::MissingClient(issuer_url.to_string()))
     }
     pub async fn client_for<'a>(
         &'a self,
         issuer_url: &str,
     ) -> Result<RwLockReadGuard<'a, AuthClient>, OIDCError> {
         RwLockReadGuard::try_map(self.client.read().await, |v| v.get(issuer_url))
-            .map_err(|v| OIDCError::MissingClient(issuer_url.to_string()))
+            .map_err(|_v| OIDCError::MissingClient(issuer_url.to_string()))
     }
 
     pub(crate) async fn handle_callback(

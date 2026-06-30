@@ -146,7 +146,7 @@ fn parse_jwks(
 
     for jwk in keys_array {
         let alg = jwk["alg"].as_str().ok_or("Missing 'alg' in JWK")?;
-        let kid = jwk["kid"].as_str().unwrap_or("default");
+        let _kid = jwk["kid"].as_str().unwrap_or("default");
 
         let decoding_key = match alg {
             "RS256" | "RS384" | "RS512" => {
@@ -219,7 +219,7 @@ impl Validator {
         public_key: DecodingKey,
     ) -> Result<Self, OIDCError> {
         let pubkeys = HashMap::new();
-        let algo = Algorithm::from_str(&algorithm)?;
+        let _algo = Algorithm::from_str(&algorithm)?;
         //let validation = Validation::new(algo);
         //validation.insecure_disable_signature_validation();
         let mut validator = Self { pubkeys };
@@ -442,7 +442,7 @@ impl Validator {
         algorithm: String,
         public_key: DecodingKey,
     ) -> Result<(), OIDCError> {
-        let algo = Algorithm::from_str(&algorithm)?;
+        let _algo = Algorithm::from_str(&algorithm)?;
         let validation = Self::default_validation(&url, &audiance, &algorithm)?;
 
         let keyid = KeyID::new(&url, &algorithm);

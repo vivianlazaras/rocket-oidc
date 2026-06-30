@@ -66,7 +66,7 @@ pub async fn keycloak(auth_state: &State<AuthState>, redirect: Option<String>) -
         Nonce::new_random,
     );
 
-    let (authorize_url, csrf_state, _nonce) = req;
+    let (authorize_url, _csrf_state, _nonce) = req;
     Redirect::to(authorize_url.to_string())
 }
 
@@ -92,7 +92,7 @@ pub async fn authorize(
         Nonce::new_random,
     );
 
-    let (authorize_url, csrf_state, _nonce) = req;
+    let (authorize_url, _csrf_state, _nonce) = req;
     Redirect::to(authorize_url.to_string())
 }
 
