@@ -108,11 +108,7 @@ pub(crate) fn get_iss_alg(token: &str) -> Option<IDClaims> {
 }
 
 pub(crate) fn extract_key_from_authorization_header(header: &str) -> Option<String> {
-    if let Some(stripped) = header.strip_prefix("Bearer ") {
-        Some(stripped.to_string())
-    } else {
-        None
-    }
+    header.strip_prefix("Bearer ").map(|stripped| stripped.to_string())
 }
 
 async fn parse_authorization_header<

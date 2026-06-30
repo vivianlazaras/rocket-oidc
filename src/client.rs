@@ -856,6 +856,18 @@ struct AuthCodeEntry {
     expires_at: Instant,
 }
 
+pub type UserInfoCallback = Arc<
+            Box<
+                dyn Fn(
+                        Option<SubjectIdentifier>,
+                        String,
+                    )
+                        -> Result<UserInfoClaims<AddClaims, PronounClaim>, OIDCError>
+                    + Send
+                    + Sync,
+            >,
+        >;
+
 /// A lightweight, local-only authentication client that mimics enough of an
 /// OpenID Connect (OIDC) client interface to integrate with the rest of the
 /// authentication pipeline.
@@ -924,17 +936,7 @@ pub struct LocalClient {
     refresh_tokens: Arc<Mutex<HashMap<String, String>>>,
 
     user_info_callback: Option<
-        Arc<
-            Box<
-                dyn Fn(
-                        Option<SubjectIdentifier>,
-                        String,
-                    )
-                        -> Result<UserInfoClaims<AddClaims, PronounClaim>, OIDCError>
-                    + Send
-                    + Sync,
-            >,
-        >,
+        UserInfoCallback
     >,
 }
 
