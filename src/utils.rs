@@ -79,9 +79,9 @@ pub(crate) fn check_expiration(cookie: &Cookie<'_>) -> (Option<OffsetDateTime>, 
         Some(Expiration::DateTime(offset)) => {
             let ts = OffsetDateTime::now_utc();
             if offset > ts {
-                return (Some(offset), false);
+                (Some(offset), false)
             } else {
-                return (Some(offset), true);
+                (Some(offset), true)
             }
         }
         None => (None, false),

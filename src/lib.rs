@@ -156,11 +156,10 @@ pub fn set_str(value: &mut Value, key: &str, val: &str) {
 }
 
 pub fn get_i64(value: &Value, key: &str) -> Result<i64, OIDCError> {
-    Ok(value
+    value
         .get(key)
-        .map(|v| v.as_i64())
-        .flatten()
-        .ok_or(OIDCError::MissingClaims("exp".to_string()))?)
+        .and_then(|v| v.as_i64())
+        .ok_or(OIDCError::MissingClaims("exp".to_string()))
 }
 
 pub fn get_str_or_vec(value: &Value, key: &str) -> Result<Vec<String>, OIDCError> {
@@ -428,7 +427,7 @@ async fn parse_oidc_token<
 ) -> Outcome<OIDCData<T>, ()> {
     let mut access_token_value = access_token.to_string();
     let _token_needs_refresh = match auth
-        .validator(&issuer)
+        .validator(issuer)
         .await
         .expect("failed to get validator")
         .decode_with_iss_alg::<T>(issuer, alg, &access_token_value)
@@ -538,7 +537,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
         let cookies = req.cookies();
         let auth = req.rocket().state::<AuthState>().unwrap().clone();
 
-        let data = match iss_alg_from_cookies(&cookies) {
+        let data = match iss_alg_from_cookies(cookies) {
             Outcome::Success(data) => data,
             Outcome::Forward(status) => return Outcome::Forward(status),
             Outcome::Error(e) => return Outcome::Error(e),
@@ -657,10 +656,7 @@ impl SessionConfig {
         };
 
         let expiration_seconds = match env::var("SESSION_EXPIRATION_SECONDS") {
-            Ok(seconds_str) => match seconds_str.parse::<u64>() {
-                Ok(seconds) => Some(seconds),
-                _ => None,
-            },
+            Ok(seconds_str) => seconds_str.parse::<u64>().ok(),
             _ => None,
         };
 

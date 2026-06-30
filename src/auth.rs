@@ -94,9 +94,7 @@ pub(crate) fn get_iss_alg(token: &str) -> Option<IDClaims> {
     };
     println!("iss: {:?}", claims.get("iss"));
     let mut iss = get_str_or_vec(&claims, "iss").expect("failed to get str or vec for iss");
-    let exp = get_i64(&claims, "exp")
-        .ok()
-        .expect("failed to get expiration");
+    let exp = get_i64(&claims, "exp").expect("failed to get expiration");
     #[cfg(not(debug_assertions))]
     panic!("this needs to be refactored to have ISS in IDClaims be a Vec");
 
@@ -148,14 +146,14 @@ async fn parse_authorization_header<
     };
     match validator.decode_with_iss_alg::<T>(&idclaims.iss, &idclaims.alg, &api_key) {
         Ok(data) => {
-            return Outcome::Success(ApiKeyGuard {
+            Outcome::Success(ApiKeyGuard {
                 claims: data.claims,
                 access_token: api_key.to_string(),
-            });
+            })
         }
         Err(err) => {
             eprintln!("API key invalid with iss/alg: {}", err);
-            return Outcome::Forward(Status::Unauthorized);
+            Outcome::Forward(Status::Unauthorized)
         }
     }
 }
@@ -220,7 +218,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaim
                     }
                 }
             } else {
-                let idclaims = match get_iss_alg(&access_token.value()) {
+                let idclaims = match get_iss_alg(access_token.value()) {
                     Some(claims) => claims,
                     None => {
                         eprintln!("Failed to decode token to get iss/alg");
@@ -301,8 +299,8 @@ impl AuthState {
             // attempt to decode access token for invalid signature.
             let token = cookie.to_string();
             // this should catch invalid signature, and result in refresh.
-            if let Some(idclaims) = get_iss_alg(&token) {
-                if self
+            if let Some(idclaims) = get_iss_alg(&token)
+                && self
                     .validator(&issuer)
                     .await?
                     .decode_with_iss_alg::<BaseClaims>(iss, &idclaims.alg, &token)
@@ -311,13 +309,10 @@ impl AuthState {
                     let (_, expired) = check_expiration(&cookie);
                     if let Ok(exp) = OffsetDateTime::from_unix_timestamp(idclaims.exp)
                         && !expired
-                    {
-                        if exp > OffsetDateTime::now_utc() {
+                        && exp > OffsetDateTime::now_utc() {
                             return Ok(Redirect::to(default_post_login));
                         }
-                    }
                 }
-            }
         }
 
         // ── 2. Exchange authorization code for tokens
@@ -338,7 +333,7 @@ impl AuthState {
             .client_for(&issuer)
             .await?
             .validator()
-            .get_supported_algorithms_for_issuer(&iss)
+            .get_supported_algorithms_for_issuer(iss)
             .ok_or(OIDCError::MissingIssuerUrl)?;
 
         // really this should check which alg appears in the validators map, but this should work for now.

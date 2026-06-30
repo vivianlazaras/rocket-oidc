@@ -108,7 +108,7 @@ impl OidcSigner {
         kid: impl Into<String>,
     ) -> Result<Self, OIDCError> {
         let pem = std::fs::read_to_string(pem_path)?;
-        Ok(Self::from_rsa_pem(&pem, kid)?)
+        Self::from_rsa_pem(&pem, kid)
     }
 
     /// returns the decoding key or public key used to validate this signer's tokens.

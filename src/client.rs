@@ -279,7 +279,7 @@ impl Validator {
         let jwks_uri = provider_metadata.jwks_uri().to_string();
 
         let jwks_json = reqwest::get(jwks_uri).await?.text().await?;
-        let keys = parse_jwks(&issuer_url, &jwks_json, validation.clone())?;
+        let keys = parse_jwks(issuer_url, &jwks_json, validation.clone())?;
         Ok(keys)
     }
 
@@ -312,7 +312,7 @@ impl Validator {
         audiance: &str,
         algorithm: &str,
     ) -> Result<Validation, OIDCError> {
-        let algo = Algorithm::from_str(&algorithm)?;
+        let algo = Algorithm::from_str(algorithm)?;
         let mut validation = Validation::new(algo);
         //validation.insecure_disable_signature_validation();
         {
@@ -381,7 +381,7 @@ impl Validator {
 
         let jwks_uri = provider_metadata.jwks_uri().to_string();
         let jwks_json = reqwest::get(jwks_uri).await?.text().await?;
-        let keys = parse_jwks(&issuer_url, &jwks_json, validation.clone())?;
+        let keys = parse_jwks(issuer_url, &jwks_json, validation.clone())?;
         for (key, value) in keys.into_iter() {
             self.pubkeys.insert(key, value);
         }

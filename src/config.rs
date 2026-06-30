@@ -46,7 +46,7 @@ impl OIDCConfig {
     /// If `post_login` is set, returns its value; otherwise defaults to `/`.
     pub fn post_login(&self) -> &str {
         match &self.post_login {
-            Some(url) => &url,
+            Some(url) => url,
             None => "/",
         }
     }
@@ -116,13 +116,13 @@ impl OIDCConfig {
     }
 
     pub async fn try_load(&self) -> Result<WorkingConfig, OIDCError> {
-        WorkingConfig::from_oidc_config(&self).await
+        WorkingConfig::from_oidc_config(self).await
     }
 }
 
 async fn load_client_secret(secret: &SecretRef) -> Result<ClientSecret, SecretError> {
     let value = secret.fetch(SecretPolicy::default()).await?;
-    let secret = trim_trailing_whitespace(&value.expose());
+    let secret = trim_trailing_whitespace(value.expose());
 
     Ok(ClientSecret::new(secret))
 }
@@ -269,12 +269,12 @@ impl WorkingConfig {
             issuer_url: self.issuer_url.as_str(),
             client_id: self.client_id.as_str(),
             redirect: &self.redirect,
-            post_login: self.post_login.as_ref().map(|s| s.as_str()),
+            post_login: self.post_login.as_deref(),
         }
     }
     pub fn post_login(&self) -> &str {
         match &self.post_login {
-            Some(url) => &url,
+            Some(url) => url,
             None => "/",
         }
     }
