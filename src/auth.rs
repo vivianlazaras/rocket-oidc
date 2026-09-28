@@ -444,4 +444,18 @@ impl AuthState {
             .await
             .insert(String::from("localhost"), client.into());
     }
+
+    pub fn empty() -> Self {
+        AuthState {
+            client: Arc::new(RwLock::new(HashMap::new())),
+            tokens: Arc::new(RwLock::new(HashMap::new())),
+            hmac_secret: generate_hmac_secret(),
+        }
+    }
+
+    pub async fn local_only(client: LocalClient) -> Self {
+        let empty = Self::empty();
+        empty.set_local_client(client).await;
+        empty
+    }
 }
