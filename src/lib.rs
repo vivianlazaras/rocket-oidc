@@ -683,9 +683,7 @@ pub async fn setup(
     if cfg!(debug_assertions) {
         //println!("using validator: {:?}", auth_state.validator);
     }
-    Ok(rocket
-        .manage(auth_state)
-        .mount("/auth", routes::get_routes()))
+    Ok(auth_state.setup(rocket))
 }
 
 /// Stores authentication cookies in the user's browser after successful login.

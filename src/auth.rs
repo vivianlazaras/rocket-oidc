@@ -458,4 +458,10 @@ impl AuthState {
         empty.set_local_client(client).await;
         empty
     }
+
+    pub fn setup(self, rocket: rocket::Rocket<rocket::Build>) -> rocket::Rocket<rocket::Build> {
+        rocket
+            .manage(self)
+            .mount("/auth", crate::routes::get_routes())
+    }
 }
