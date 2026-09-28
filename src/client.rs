@@ -954,8 +954,23 @@ impl fmt::Debug for LocalClient {
 }
 
 impl LocalClient {
+    /// Constructs a new local client with the givern configuraiton, and token signer.
+    ///
+    /// # Arguments
+    /// 1. config: [`OIDCCOnfig`]
+    /// 2. signer: [`OidcSigner`] handles issuing signed tokens.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use rocket_oidc::{client::LocalClient, config::WorkingConfig, sign::OidcSigner};
+    /// // this should be loaded from a file.
+    /// let priv_key_str = "...";
+    /// let config = WorkingConfig::new_local("localhost/accounts/dashboard").unwrap();
+    /// let signer = OidcSigner::from_x509_pem(priv_key_str, "0").expect("failed to load pem");
+    /// let client = LocalClient::new(config, signer).unwrap();
+    /// ```
     pub fn new(config: WorkingConfig, signer: OidcSigner) -> Result<LocalClient, OIDCError> {
-        let validator = signer.validator("localhost.local", "account")?;
+        let validator = signer.validator("localhost", "account")?;
         Ok(Self {
             config,
             signer,

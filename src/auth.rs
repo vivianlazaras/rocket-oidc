@@ -294,18 +294,21 @@ impl AuthState {
             let token = cookie.to_string();
             // this should catch invalid signature, and result in refresh.
             if let Some(idclaims) = get_iss_alg(&token)
-                && self
+            {
+                if self
                     .validator(&issuer)
                     .await?
                     .decode_with_iss_alg::<BaseClaims>(iss, &idclaims.alg, &token)
-                    .is_ok()
-            {
-                let (_, expired) = check_expiration(&cookie);
-                if let Ok(exp) = OffsetDateTime::from_unix_timestamp(idclaims.exp)
-                    && !expired
-                    && exp > OffsetDateTime::now_utc()
-                {
-                    return Ok(Redirect::to(default_post_login));
+                    .is_ok() {
+                    let (_, expired) = check_expiration(&cookie);
+                    match OffsetDateTime::from_unix_timestamp(idclaims.exp) {
+                        Ok(exp) => {
+                            if !expired && exp > OffsetDateTime::now_utc() {
+                                return Ok(Redirect::to(default_post_login));
+                            }
+                        },
+                        Err(_) => {},
+                    }
                 }
             }
         }
@@ -434,10 +437,11 @@ impl AuthState {
         Ok(())
     }
 
+    /// Adds the local client to the list of clients.
     pub async fn set_local_client(&self, client: LocalClient) {
         self.client
             .write()
             .await
-            .insert(String::from("localhost.local"), client.into());
+            .insert(String::from("localhost"), client.into());
     }
 }

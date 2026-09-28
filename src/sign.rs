@@ -62,6 +62,8 @@ use crate::utils::*;
 use jsonwebtoken::DecodingKey;
 use jsonwebtoken::{Algorithm, EncodingKey};
 use serde::Serialize;
+use pkcs8::{EncodePublicKey, EncodePrivateKey};
+use rsa::RsaPrivateKey;
 
 /// An OpenID Connect (OIDC) JWT signer backed by an encoding key.
 ///
@@ -210,11 +212,11 @@ impl OidcSigner {
         Ok(jsonwebtoken::encode(&header, &map, &self.key)?)
     }
 }
-/*
+
 /// this is a testing function used to test sign / decode round trip
-pub(crate) fn generate_rsa_pkcs8_pair() -> (String, String) {
+pub fn generate_rsa_pkcs8_pair() -> (String, String) {
     // Generate a 2048-bit RSA private key
-    let mut rng = OsRng;
+    let mut rng = rand::thread_rng();
 
     let private_key = RsaPrivateKey::new(&mut rng, 2048).expect("failed to generate key");
 
@@ -230,16 +232,15 @@ pub(crate) fn generate_rsa_pkcs8_pair() -> (String, String) {
         .expect("failed to encode public key");
 
     (private_key_pem.to_string(), public_key_pem)
-}*/
+}
 
 #[cfg(test)]
 pub(crate) mod tests {
     use crate::sign::OidcSigner;
     use crate::utils::*;
-    use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
+    use jsonwebtoken::{Algorithm, Validation, decode};
     use serde::{Deserialize, Serialize};
     use time::OffsetDateTime;
-    use uuid::Uuid;
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct MyClaims {
@@ -253,7 +254,7 @@ pub(crate) mod tests {
     #[test]
     fn test_sign_and_verify() -> Result<(), Box<dyn std::error::Error>> {
         // --- 1. Create signer ---
-        let (private_pem, public_pem) = crate::sign::generate_rsa_pkcs8_pair();
+        let (private_pem, _public_pem) = crate::sign::generate_rsa_pkcs8_pair();
         let signer = OidcSigner::from_rsa_pem(&private_pem, "test-kid")?;
         let decoding_key = signer.decoding_key();
         println!("signer: {:?}", signer);

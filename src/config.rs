@@ -16,6 +16,8 @@ pub struct OIDCConfig {
     pub client_id: String,
     pub client_secret: SecretRef,
     pub issuer_url: String,
+    /// the hostname on which the current server can be accessed (the public facing route) the user will be redirect to this route after going through the OIDC provider
+    /// and as such this route must be accessible to the user's computer.
     pub redirect: String,
     pub post_login: Option<String>,
     pub privkey: Option<SecretRef>,
@@ -41,6 +43,7 @@ impl Default for OIDCConfig {
 ///
 /// Typically loaded from environment variables at runtime.
 impl OIDCConfig {
+    
     /// Returns the URL to redirect to after login has completed.
     ///
     /// If `post_login` is set, returns its value; otherwise defaults to `/`.
@@ -187,6 +190,23 @@ impl TryFrom<OIDCConfig> for WorkingConfig {
 }*/
 
 impl WorkingConfig {
+    /// creates a new local client configuration based on the supplied information.
+    ///
+    /// for local configuration the redirect field isn't needed as no external provider needs to redirect back to the current server.
+    /// # Arguments
+    /// post_login: the URL to redirect the user to after login, this can be a relative, or absolute URL.
+    /// privkey: a [`secret_ref::SecretRef`] pointing to an x509 pem key file to load a digital signing key to sign JSON Web Tokens (JWTs).
+    pub fn new_local<S: Into<String>>(post_login: S) -> Result<Self, OIDCError> {
+        Ok(WorkingConfig {
+            name: "Local Sign In".into(),
+            client_id: ClientId::new("localhost".into()),
+            issuer_url: IssuerUrl::new("localhost".into())?,
+            redirect: "".into(),
+            client_secret: ClientSecret::new("secret".into()),
+            post_login: Some(post_login.into())
+        })
+    }
+    
     /// Constructs a new `WorkingConfig` from a high-level `OIDCConfig`.
     ///
     /// Loads the client secret asynchronously (e.g., from a file or secure vault).
