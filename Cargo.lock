@@ -2594,6 +2594,8 @@ dependencies = [
 [[package]]
 name = "secret_ref"
 version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "531f1a700963c010257d994f2eb9bb7bc1c3ecca25a7e7d4ecb75bcebac3277f"
 dependencies = [
  "reqwest 0.13.1",
  "serde",
