@@ -490,6 +490,14 @@ async fn parse_oidc_token<
         }
     }
 
+    let claims = match serde_json::from_str(&access_token_value) {
+        Ok(claims) => claims,
+        Err(e) => {
+            eprintln!("failed to deserialized claims: {}, {}", e, access_token_value);
+            return Outcome::Forward(Status::Unauthorized);
+        },
+    };
+    /*println!("in parse OIDC token access_token_value: {}", access_token_value);
     let claims = match auth
         .validator(issuer)
         .await
@@ -501,7 +509,7 @@ async fn parse_oidc_token<
             eprintln!("Token decode failed: {:?}", err);
             return Outcome::Forward(Status::Unauthorized);
         }
-    };
+    };*/
 
     // Optionally fetch userinfo
     let userinfo = match client
@@ -557,6 +565,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
         if cfg!(debug_assertions) {
             println!("old access token in OIDCGuard: {}", access_token_value);
         }
+        println!("in from request access token value: {}", access_token_value);
         let outcome = parse_oidc_token(&auth, issuer, alg, &access_token_value).await;
         match outcome {
             Outcome::Success(data) => {

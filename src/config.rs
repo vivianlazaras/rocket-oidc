@@ -43,7 +43,6 @@ impl Default for OIDCConfig {
 ///
 /// Typically loaded from environment variables at runtime.
 impl OIDCConfig {
-    
     /// Returns the URL to redirect to after login has completed.
     ///
     /// If `post_login` is set, returns its value; otherwise defaults to `/`.
@@ -199,14 +198,14 @@ impl WorkingConfig {
     pub fn new_local<S: Into<String>>(post_login: S) -> Result<Self, OIDCError> {
         Ok(WorkingConfig {
             name: "Local Sign In".into(),
-            client_id: ClientId::new("localhost".into()),
-            issuer_url: IssuerUrl::new("localhost".into())?,
+            client_id: ClientId::new("http://localhost".into()),
+            issuer_url: IssuerUrl::new("http://localhost".into())?,
             redirect: "".into(),
             client_secret: ClientSecret::new("secret".into()),
-            post_login: Some(post_login.into())
+            post_login: Some(post_login.into()),
         })
     }
-    
+
     /// Constructs a new `WorkingConfig` from a high-level `OIDCConfig`.
     ///
     /// Loads the client secret asynchronously (e.g., from a file or secure vault).

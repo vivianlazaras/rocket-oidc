@@ -108,7 +108,9 @@ pub(crate) fn get_iss_alg(token: &str) -> Option<IDClaims> {
 }
 
 pub(crate) fn extract_key_from_authorization_header(header: &str) -> Option<String> {
-    header.strip_prefix("Bearer ").map(|stripped| stripped.to_string())
+    header
+        .strip_prefix("Bearer ")
+        .map(|stripped| stripped.to_string())
 }
 
 async fn parse_authorization_header<
@@ -293,21 +295,21 @@ impl AuthState {
             // attempt to decode access token for invalid signature.
             let token = cookie.to_string();
             // this should catch invalid signature, and result in refresh.
-            if let Some(idclaims) = get_iss_alg(&token)
-            {
+            if let Some(idclaims) = get_iss_alg(&token) {
                 if self
                     .validator(&issuer)
                     .await?
                     .decode_with_iss_alg::<BaseClaims>(iss, &idclaims.alg, &token)
-                    .is_ok() {
+                    .is_ok()
+                {
                     let (_, expired) = check_expiration(&cookie);
                     match OffsetDateTime::from_unix_timestamp(idclaims.exp) {
                         Ok(exp) => {
                             if !expired && exp > OffsetDateTime::now_utc() {
                                 return Ok(Redirect::to(default_post_login));
                             }
-                        },
-                        Err(_) => {},
+                        }
+                        Err(_) => {}
                     }
                 }
             }
@@ -442,7 +444,7 @@ impl AuthState {
         self.client
             .write()
             .await
-            .insert(String::from("localhost"), client.into());
+            .insert(String::from("http://localhost"), client.into());
     }
 
     pub fn empty() -> Self {
@@ -463,5 +465,18 @@ impl AuthState {
         rocket
             .manage(self)
             .mount("/auth", crate::routes::get_routes())
+    }
+
+    pub async fn local_login(
+        &self,
+        jar: &CookieJar<'_>,
+        alg: &str,
+        subject: &str,
+    ) -> Result<String, OIDCError> {
+        let client_ref = self.client_for("http://localhost").await?;
+        let response = client_ref.try_local()?.local_login(jar, alg, subject).await?;
+        let refresh_token = response.refresh_token().expect("refresh token unset");
+        self.tokens.write().await.insert("http://localhost".to_string(), refresh_token.secret().clone());
+        Ok(response.access_token().secret().clone())
     }
 }

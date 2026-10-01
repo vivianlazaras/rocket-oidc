@@ -12,6 +12,9 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
+
+use time::Duration;
+use time::OffsetDateTime;
 use jsonwebtoken::*;
 use openidconnect::core::CoreGenderClaim;
 use openidconnect::core::*;
@@ -27,6 +30,8 @@ use openidconnect::reqwest;
 use openidconnect::*;
 use serde::Serialize;
 use tokio::sync::Mutex;
+use rocket::http::{CookieJar, Cookie};
+use rocket::http::SameSite;
 
 pub type OpenIDClient<
     HasDeviceAuthUrl = EndpointNotSet,
@@ -482,7 +487,7 @@ impl Validator {
                         eprintln!("DEBUG: Unvalidated token claims: {:#?}", data.claims);
                     }
                     Err(e) => {
-                        eprintln!("DEBUG: Failed to decode unvalidated token: {:?}", e);
+                        eprintln!("DEBUG: Failed to decode unvalidated token: {:?}, access token original: {}", e, access_token);
                     }
                 }
             }
@@ -857,16 +862,15 @@ struct AuthCodeEntry {
 }
 
 pub type UserInfoCallback = Arc<
-            Box<
-                dyn Fn(
-                        Option<SubjectIdentifier>,
-                        String,
-                    )
-                        -> Result<UserInfoClaims<AddClaims, PronounClaim>, OIDCError>
-                    + Send
-                    + Sync,
-            >,
-        >;
+    Box<
+        dyn Fn(
+                Option<SubjectIdentifier>,
+                String,
+            ) -> Result<UserInfoClaims<AddClaims, PronounClaim>, OIDCError>
+            + Send
+            + Sync,
+    >,
+>;
 
 /// A lightweight, local-only authentication client that mimics enough of an
 /// OpenID Connect (OIDC) client interface to integrate with the rest of the
@@ -935,9 +939,7 @@ pub struct LocalClient {
     codes: Arc<Mutex<HashMap<String, AuthCodeEntry>>>,
     refresh_tokens: Arc<Mutex<HashMap<String, String>>>,
 
-    user_info_callback: Option<
-        UserInfoCallback
-    >,
+    user_info_callback: Option<UserInfoCallback>,
 }
 
 impl fmt::Debug for LocalClient {
@@ -966,11 +968,11 @@ impl LocalClient {
     /// // this should be loaded from a file.
     /// let priv_key_str = "...";
     /// let config = WorkingConfig::new_local("localhost/accounts/dashboard").unwrap();
-    /// let signer = OidcSigner::from_x509_pem(priv_key_str, "0").expect("failed to load pem");
+    /// let signer = OidcSigner::from_x509_pem(priv_key_str, "0");
     /// let client = LocalClient::new(config, signer).unwrap();
     /// ```
     pub fn new(config: WorkingConfig, signer: OidcSigner) -> Result<LocalClient, OIDCError> {
-        let validator = signer.validator("localhost", "account")?;
+        let validator = signer.validator("http://localhost", "self")?;
         Ok(Self {
             config,
             signer,
@@ -1071,8 +1073,8 @@ impl LocalClient {
 
         let claims = AccessTokenClaims::new(
             subject.clone(),
-            vec!["localhost.local".into()],
-            vec!["account".into()],
+            vec!["http://localhost".into()],
+            vec!["self".into()],
             3600,
         );
 
@@ -1110,8 +1112,8 @@ impl LocalClient {
 
         let claims = AccessTokenClaims::new(
             subject.clone(),
-            vec!["localhost.local".into()],
-            vec!["account".into()],
+            vec!["http://localhost".into()],
+            vec!["self".into()],
             3600,
         );
 
@@ -1144,6 +1146,84 @@ impl LocalClient {
             Some(callback) => callback(subject, access_token),
             None => Err(UserInfoErr::MissingEndpoint.into()),
         }
+    }
+
+    pub async fn local_login(
+        &self,
+        jar: &CookieJar<'_>,
+        algorithm: &str,
+        subject: &str,
+    ) -> Result<CoreTokenResponse, OIDCError> {
+        
+        let code = self.issue_code(subject.to_string()).await;
+        let response = self.exchange_code(code).await?;
+        let access_token = response.access_token().secret().clone();
+        let issuer = "http://localhost";
+        #[cfg(debug_assertions)]
+        println!("access token in local login fn: {}", access_token);
+        /*
+        let mut value = serde_json::to_value(&claims)?;
+        let (expires, now) = match value.get("exp") {
+            Some(expires) => (OffsetDateTime::from_unix_timestamp(expires.as_i64().expect("expected a unix epoch")).expect("failed to parse unix epoch"), OffsetDateTime::now_utc()),
+            None => {
+                let hour = OffsetDateTime::now_utc()
+                .checked_add(Duration::new(3600, 0))
+                .expect("failed to add 1 hour");
+                value.as_object_mut().expect("should be an object").insert("exp".into(), hour.unix_timestamp().into());
+                (hour, OffsetDateTime::now_utc())
+            },
+        };
+        if value.get("iat").is_none() {
+            value.as_object_mut().expect("should be an object").insert("iat".into(), now.unix_timestamp().into());
+        }
+
+        if value.get("iss").is_none() {
+            value.as_object_mut().expect("should be an object").insert("iss".into(), issuer.into());
+        }
+
+        if value.get("aud").is_none() {
+            value.as_object_mut().expect("should be an object").insert("aud".into(), "self".into());
+        }
+
+        if value.get("sub").is_none() {
+            value.as_object_mut().expect("should be an object").insert("sub".into(), subject.into());
+        }
+
+        let access_token = self.signer.sign(&value)?;
+        
+        
+        */
+        let issuer_exp = OffsetDateTime::now_utc()
+            .checked_add(Duration::new(3600, 0))
+            .expect("failed to add 1 hour");
+        // Add the access_token cookie
+        jar.add_private(
+            Cookie::build(("access_token", access_token.clone()))
+                .secure(false)
+                // this should be when the token expires but meh
+                .expires(issuer_exp)
+                .http_only(true)
+                .same_site(SameSite::Lax),
+        );
+
+        // Build issuer_data JSON
+        let issuer_data = IssuerData {
+            issuer: issuer.to_string(),
+            algorithm: algorithm.to_string(),
+        };
+
+        let issuer_data_json = serde_json::to_string(&issuer_data)?;
+
+        // Add issuer_data cookie
+        jar.add_private(
+            Cookie::build(("issuer_data", issuer_data_json))
+                .secure(false)
+                .http_only(false) // if you don't want JS access, set to true
+                .expires(issuer_exp)
+                .same_site(SameSite::Lax),
+        );
+
+        Ok(response)
     }
 }
 
@@ -1229,6 +1309,13 @@ impl AuthClient {
                 .map_err(|e| OIDCError::Custom(e.to_string()))?,
             Self::Local(local) => local.user_info(access_token, subject)?,
         })
+    }
+
+    pub fn try_local(&self) -> Result<&LocalClient, OIDCError> {
+        match self {
+            AuthClient::OIDC(_) => Err(OIDCError::NonLocalClient),
+            AuthClient::Local(client) => Ok(client),
+        }
     }
 }
 

@@ -97,6 +97,9 @@ pub enum OIDCError {
     #[error("missing private key path when trying to load LocalClient instance")]
     MissingPrivateKey,
 
+    #[error("attempted to perform local login on non local client")]
+    NonLocalClient,
+
     #[error("{0}")]
     Custom(String),
 }

@@ -2593,7 +2593,7 @@ dependencies = [
 
 [[package]]
 name = "secret_ref"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "reqwest 0.13.1",
  "serde",
