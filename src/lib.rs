@@ -1,8 +1,7 @@
 #![deny(non_snake_case)]
 #![deny(non_local_definitions)]
-#![deny(unused_variables)]
 #![allow(missing_docs)]
-#![deny(unused_imports)]
+#![deny(unused)]
 #![deny(dead_code)]
 /*!
 ```rust
@@ -87,12 +86,13 @@ async fn rocket() -> rocket::Rocket<Build> {
 #[macro_use]
 extern crate rocket;
 
-use std::fmt::Debug;
 pub mod auth;
 pub mod claims;
 pub mod client;
 pub mod config;
 pub mod errors;
+#[cfg(feature = "openapi")]
+pub mod openapi;
 pub mod routes;
 pub mod sign;
 pub mod token;
@@ -106,6 +106,7 @@ use crate::errors::{OIDCError, UserInfoErr};
 use crate::utils::*;
 
 use std::env;
+use std::fmt::Debug;
 use std::path::PathBuf;
 
 use rand::RngCore;
@@ -493,9 +494,12 @@ async fn parse_oidc_token<
     let claims = match serde_json::from_str(&access_token_value) {
         Ok(claims) => claims,
         Err(e) => {
-            eprintln!("failed to deserialized claims: {}, {}", e, access_token_value);
+            eprintln!(
+                "failed to deserialized claims: {}, {}",
+                e, access_token_value
+            );
             return Outcome::Forward(Status::Unauthorized);
-        },
+        }
     };
     /*println!("in parse OIDC token access_token_value: {}", access_token_value);
     let claims = match auth

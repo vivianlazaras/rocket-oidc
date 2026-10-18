@@ -12,14 +12,13 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{collections::HashMap, fmt::Debug, str::FromStr};
 
-
-use time::Duration;
-use time::OffsetDateTime;
 use jsonwebtoken::*;
 use openidconnect::core::CoreGenderClaim;
 use openidconnect::core::*;
 use reqwest::Url;
 use serde_derive::*;
+use time::Duration;
+use time::OffsetDateTime;
 
 use rand::RngCore;
 use serde_json::Value;
@@ -28,10 +27,10 @@ use serde::de::DeserializeOwned;
 
 use openidconnect::reqwest;
 use openidconnect::*;
+use rocket::http::SameSite;
+use rocket::http::{Cookie, CookieJar};
 use serde::Serialize;
 use tokio::sync::Mutex;
-use rocket::http::{CookieJar, Cookie};
-use rocket::http::SameSite;
 
 pub type OpenIDClient<
     HasDeviceAuthUrl = EndpointNotSet,
@@ -487,7 +486,10 @@ impl Validator {
                         eprintln!("DEBUG: Unvalidated token claims: {:#?}", data.claims);
                     }
                     Err(e) => {
-                        eprintln!("DEBUG: Failed to decode unvalidated token: {:?}, access token original: {}", e, access_token);
+                        eprintln!(
+                            "DEBUG: Failed to decode unvalidated token: {:?}, access token original: {}",
+                            e, access_token
+                        );
                     }
                 }
             }
@@ -1154,7 +1156,6 @@ impl LocalClient {
         algorithm: &str,
         subject: &str,
     ) -> Result<CoreTokenResponse, OIDCError> {
-        
         let code = self.issue_code(subject.to_string()).await;
         let response = self.exchange_code(code).await?;
         let access_token = response.access_token().secret().clone();
@@ -1190,8 +1191,8 @@ impl LocalClient {
         }
 
         let access_token = self.signer.sign(&value)?;
-        
-        
+
+
         */
         let issuer_exp = OffsetDateTime::now_utc()
             .checked_add(Duration::new(3600, 0))

@@ -474,9 +474,15 @@ impl AuthState {
         subject: &str,
     ) -> Result<String, OIDCError> {
         let client_ref = self.client_for("http://localhost").await?;
-        let response = client_ref.try_local()?.local_login(jar, alg, subject).await?;
+        let response = client_ref
+            .try_local()?
+            .local_login(jar, alg, subject)
+            .await?;
         let refresh_token = response.refresh_token().expect("refresh token unset");
-        self.tokens.write().await.insert("http://localhost".to_string(), refresh_token.secret().clone());
+        self.tokens.write().await.insert(
+            "http://localhost".to_string(),
+            refresh_token.secret().clone(),
+        );
         Ok(response.access_token().secret().clone())
     }
 }
