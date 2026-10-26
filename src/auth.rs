@@ -485,4 +485,13 @@ impl AuthState {
         );
         Ok(response.access_token().secret().clone())
     }
+
+    pub async fn local_logout(&self, jar: &CookieJar<'_>) -> Result<(), OIDCError> {
+        let client_ref = self.client_for("http://localhost").await?;
+        client_ref
+            .try_local()?
+            .local_logout(jar)
+            .await?;
+        Ok(())
+    }
 }

@@ -1162,38 +1162,7 @@ impl LocalClient {
         let issuer = "http://localhost";
         #[cfg(debug_assertions)]
         println!("access token in local login fn: {}", access_token);
-        /*
-        let mut value = serde_json::to_value(&claims)?;
-        let (expires, now) = match value.get("exp") {
-            Some(expires) => (OffsetDateTime::from_unix_timestamp(expires.as_i64().expect("expected a unix epoch")).expect("failed to parse unix epoch"), OffsetDateTime::now_utc()),
-            None => {
-                let hour = OffsetDateTime::now_utc()
-                .checked_add(Duration::new(3600, 0))
-                .expect("failed to add 1 hour");
-                value.as_object_mut().expect("should be an object").insert("exp".into(), hour.unix_timestamp().into());
-                (hour, OffsetDateTime::now_utc())
-            },
-        };
-        if value.get("iat").is_none() {
-            value.as_object_mut().expect("should be an object").insert("iat".into(), now.unix_timestamp().into());
-        }
-
-        if value.get("iss").is_none() {
-            value.as_object_mut().expect("should be an object").insert("iss".into(), issuer.into());
-        }
-
-        if value.get("aud").is_none() {
-            value.as_object_mut().expect("should be an object").insert("aud".into(), "self".into());
-        }
-
-        if value.get("sub").is_none() {
-            value.as_object_mut().expect("should be an object").insert("sub".into(), subject.into());
-        }
-
-        let access_token = self.signer.sign(&value)?;
-
-
-        */
+        
         let issuer_exp = OffsetDateTime::now_utc()
             .checked_add(Duration::new(3600, 0))
             .expect("failed to add 1 hour");
@@ -1225,6 +1194,26 @@ impl LocalClient {
         );
 
         Ok(response)
+    }
+
+    pub async fn local_logout(
+        &self,
+        jar: &CookieJar<'_>,
+    ) -> Result<(), OIDCError> {
+        jar.remove_private(
+            Cookie::build(("access_token", ""))
+                .http_only(true)
+                .same_site(SameSite::Lax),
+        );
+        
+        jar.remove_private(
+            Cookie::build(("issuer_data", ""))
+                .secure(false)
+                .http_only(false) // if you don't want JS access, set to true
+                .same_site(SameSite::Lax),
+        );
+
+        Ok(())
     }
 }
 

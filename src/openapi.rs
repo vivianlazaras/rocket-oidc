@@ -27,16 +27,16 @@ impl<'a, T: crate::CoreClaims + Serialize + DeserializeOwned + Send + Sync + std
         _required: bool,
     ) -> Result<RequestHeaderInput, OpenApiError> {
         Ok(RequestHeaderInput::Security(
-            "ApiKey".into(),
+            "Bearer".into(),
             SecurityScheme {
                 description: Some("API Key for authentication".into()),
-                data: SecuritySchemeData::ApiKey {
-                    name: "Authorization".into(),
-                    location: "Header".into(),
+                data: SecuritySchemeData::Http {
+                    scheme: "Bearer".into(),
+                    bearer_format: Some("JWT".into()),
                 },
                 extensions: map![],
             },
-            map![],
+            map!["Bearer".into() => vec![]],
         ))
     }
 
