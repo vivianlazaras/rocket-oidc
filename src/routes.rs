@@ -43,7 +43,7 @@ fn build_state(return_path: Option<String>, secret: &[u8]) -> String {
 
     format!("{payload_b64}.{sig_b64}")
 }
-
+/*
 #[deprecated]
 #[get("/keycloak?<redirect>")]
 pub async fn keycloak(auth_state: &State<AuthState>, redirect: Option<String>) -> Redirect {
@@ -68,7 +68,7 @@ pub async fn keycloak(auth_state: &State<AuthState>, redirect: Option<String>) -
 
     let (authorize_url, _csrf_state, _nonce) = req;
     Redirect::to(authorize_url.to_string())
-}
+}*/
 
 #[get("/authorize?<issuer_url>&<redirect>")]
 pub async fn authorize(
@@ -143,5 +143,5 @@ pub async fn callback(
 }
 
 pub fn get_routes() -> Vec<Route> {
-    routes![authorize, callback, keycloak]
+    routes![authorize, callback]
 }

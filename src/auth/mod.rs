@@ -1,6 +1,8 @@
 //! This module provides `AuthGuard` which doesn't request user info, but simply validates server public key
 //! this is useful for implementing local only login systems that don't rely on full OIDC support from the authorization server
 
+pub mod api;
+
 use crate::BaseClaims;
 use crate::CoreClaims;
 use crate::client::LocalClient;
@@ -39,6 +41,7 @@ pub struct AuthGuard<T: Serialize + DeserializeOwned + Debug> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub(crate) struct IDClaims {
+
     pub iss: String,
     pub alg: String,
     pub exp: i64,
@@ -48,15 +51,6 @@ impl<T: Serialize + DeserializeOwned + Debug> AuthGuard<T> {
     pub fn access_token(&self) -> &str {
         &self.access_token
     }
-}
-
-/// API Key based guard
-/// This guard extracts the API key from the `Authorization` header and validates it
-/// It is useful for API endpoints that require authentication via API keys
-#[derive(Debug, Serialize)]
-pub struct ApiKeyGuard<T: Serialize + DeserializeOwned + Debug> {
-    pub claims: T,
-    pub access_token: String,
 }
 
 fn alg_to_string(alg: &jsonwebtoken::Algorithm) -> String {
@@ -95,8 +89,8 @@ pub(crate) fn get_iss_alg(token: &str) -> Option<IDClaims> {
     println!("iss: {:?}", claims.get("iss"));
     let mut iss = get_str_or_vec(&claims, "iss").expect("failed to get str or vec for iss");
     let exp = get_i64(&claims, "exp").expect("failed to get expiration");
-    #[cfg(not(debug_assertions))]
-    panic!("this needs to be refactored to have ISS in IDClaims be a Vec");
+    //#[cfg(not(debug_assertions))]
+    //panic!("this needs to be refactored to have ISS in IDClaims be a Vec");
 
     Some(IDClaims {
         iss: iss
@@ -111,62 +105,6 @@ pub(crate) fn extract_key_from_authorization_header(header: &str) -> Option<Stri
     header
         .strip_prefix("Bearer ")
         .map(|stripped| stripped.to_string())
-}
-
-async fn parse_authorization_header<
-    T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims,
->(
-    header: &str,
-    auth: &AuthState,
-) -> Outcome<ApiKeyGuard<T>, ()> {
-    let api_key = match extract_key_from_authorization_header(header) {
-        Some(key) => key,
-        None => {
-            eprintln!("Authorization header missing or invalid");
-            return Outcome::Forward(Status::Unauthorized);
-        }
-    };
-
-    let idclaims = match get_iss_alg(api_key.as_str()) {
-        Some(claims) => claims,
-        None => {
-            eprintln!("Failed to decode token to get iss/alg");
-            return Outcome::Forward(Status::Unauthorized);
-        }
-    };
-
-    let validator = match auth.validator(&idclaims.iss).await {
-        Ok(validator) => validator,
-        Err(e) => {
-            eprintln!("failed to fetch validator {e}");
-            return Outcome::Forward(Status::Unauthorized);
-        }
-    };
-    match validator.decode_with_iss_alg::<T>(&idclaims.iss, &idclaims.alg, &api_key) {
-        Ok(data) => Outcome::Success(ApiKeyGuard {
-            claims: data.claims,
-            access_token: api_key.to_string(),
-        }),
-        Err(err) => {
-            eprintln!("API key invalid with iss/alg: {}", err);
-            Outcome::Forward(Status::Unauthorized)
-        }
-    }
-}
-
-#[rocket::async_trait]
-impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims> FromRequest<'r>
-    for ApiKeyGuard<T>
-{
-    type Error = ();
-
-    async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
-        let api_key = req.headers().get_one("Authorization").unwrap_or_default();
-
-        let auth = req.rocket().state::<AuthState>().unwrap().clone();
-
-        parse_authorization_header(api_key, &auth).await
-    }
 }
 
 #[rocket::async_trait]
