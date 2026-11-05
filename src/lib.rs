@@ -390,18 +390,18 @@ fn iss_alg_from_cookies(cookies: &CookieJar<'_>) -> Outcome<IssuerData, ()> {
         None => {
             // I think the ISS cookie is expiring too quickly relative to access token.
             // issuer_data should live as long as refresh_token.
-            eprintln!("No issuer_data cookie");
+            log::warn!("No issuer_data cookie");
             return Outcome::Forward(Status::Unauthorized);
         }
     };
     if cfg!(debug_assertions) {
-        eprintln!("using issuer: {}", issuer);
+        log::warn!("using issuer: {}", issuer);
     }
 
     let alg = match &issuer_data {
         Some(data) => &data.algorithm,
         None => {
-            eprintln!("No issuer_data cookie");
+            log::warn!("No issuer_data cookie");
             return Outcome::Forward(Status::Unauthorized);
         }
     };
@@ -462,7 +462,7 @@ async fn parse_oidc_token<
     let refresh_token_str = match refresh_token_str {
         Some(t) => t,
         None => {
-            eprintln!("No refresh token stored for issuer: {}", issuer);
+            log::warn!("No refresh token stored for issuer: {}", issuer);
             return Outcome::Forward(Status::Unauthorized);
         }
     };
@@ -471,7 +471,7 @@ async fn parse_oidc_token<
     let client = match auth.client_for(issuer).await {
         Ok(client) => client,
         Err(e) => {
-            eprintln!("No oidc client stored for issuer: {}, {}", issuer, e);
+            log::warn!("No oidc client stored for issuer: {}, {}", issuer, e);
             return Outcome::Forward(Status::Unauthorized);
         }
     };
@@ -486,7 +486,7 @@ async fn parse_oidc_token<
             access_token_value = new_token.access_token().secret().to_string();
         }
         Err(err) => {
-            eprintln!("Failed to refresh access token: {:?}", err);
+            log::warn!("Failed to refresh access token: {:?}", err);
             return Outcome::Forward(Status::Unauthorized);
         }
     }
@@ -494,14 +494,15 @@ async fn parse_oidc_token<
     let claims = match serde_json::from_str(&access_token_value) {
         Ok(claims) => claims,
         Err(e) => {
-            eprintln!(
+            log::warn!(
                 "failed to deserialized claims: {}, {}",
-                e, access_token_value
+                e,
+                access_token_value
             );
             return Outcome::Forward(Status::Unauthorized);
         }
     };
-    /*println!("in parse OIDC token access_token_value: {}", access_token_value);
+    /*log::info!("in parse OIDC token access_token_value: {}", access_token_value);
     let claims = match auth
         .validator(issuer)
         .await
@@ -510,7 +511,7 @@ async fn parse_oidc_token<
     {
         Ok(data) => data.claims,
         Err(err) => {
-            eprintln!("Token decode failed: {:?}", err);
+            log::warn!("Token decode failed: {:?}", err);
             return Outcome::Forward(Status::Unauthorized);
         }
     };*/
@@ -522,12 +523,12 @@ async fn parse_oidc_token<
     {
         Ok(info) => Some(UserInfo::try_from(info).unwrap()),
         Err(err) => {
-            eprintln!("Failed to fetch userinfo: {:?}", err);
+            log::warn!("Failed to fetch userinfo: {:?}", err);
             None
         }
     };
     if cfg!(debug_assertions) {
-        println!("returning after refresh");
+        log::info!("returning after refresh");
     }
     Outcome::Success(OIDCData {
         claims,
@@ -554,7 +555,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
         let (issuer, alg) = (&data.issuer, &data.algorithm);
 
         if cfg!(debug_assertions) {
-            eprintln!("using issuer: {}", issuer);
+            log::warn!("using issuer: {}", issuer);
         }
         // Attempt to read access token from cookies
         // if unset return unauthorized
@@ -567,9 +568,8 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
         };
 
         if cfg!(debug_assertions) {
-            println!("old access token in OIDCGuard: {}", access_token_value);
+            log::info!("old access token in OIDCGuard: {}", access_token_value);
         }
-        println!("in from request access token value: {}", access_token_value);
         let outcome = parse_oidc_token(&auth, issuer, alg, &access_token_value).await;
         match outcome {
             Outcome::Success(data) => {
@@ -578,7 +578,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
                     Cookie::build(("access_token", data.access_token.clone())).http_only(true),
                 );
                 if cfg!(debug_assertions) {
-                    println!(
+                    log::info!(
                         "setting access token after parsing with OIDC: {}",
                         data.access_token
                     );
@@ -607,7 +607,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
         let api_key = match crate::auth::extract_key_from_authorization_header(header) {
             Some(key) => key,
             None => {
-                eprintln!("Authorization header missing or invalid");
+                log::warn!("Authorization header missing or invalid");
                 return Outcome::Forward(Status::Unauthorized);
             }
         };
@@ -615,7 +615,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
         let data = match crate::auth::get_iss_alg(&api_key) {
             Some(claims) => claims,
             None => {
-                eprintln!("no issuer data / IDClaims");
+                log::warn!("no issuer data / IDClaims");
                 return Outcome::Forward(Status::Unauthorized);
             }
         };
@@ -623,7 +623,7 @@ impl<'r, T: Serialize + Debug + DeserializeOwned + std::marker::Send + Sync + Co
         let (issuer, alg) = (&data.iss, &data.alg);
 
         if cfg!(debug_assertions) {
-            eprintln!("using issuer: {}", issuer);
+            log::warn!("using issuer: {}", issuer);
         }
 
         let outcome = parse_oidc_token(&auth, issuer, alg, &api_key).await;
@@ -694,7 +694,7 @@ pub async fn setup(
     let auth_state = AuthState::from_oidc_configs(configs).await?;
 
     if cfg!(debug_assertions) {
-        //println!("using validator: {:?}", auth_state.validator);
+        //log::info!("using validator: {:?}", auth_state.validator);
     }
     Ok(auth_state.setup(rocket))
 }

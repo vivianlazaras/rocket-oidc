@@ -1162,7 +1162,7 @@ impl LocalClient {
         let issuer = "http://localhost";
         #[cfg(debug_assertions)]
         println!("access token in local login fn: {}", access_token);
-        
+
         let issuer_exp = OffsetDateTime::now_utc()
             .checked_add(Duration::new(3600, 0))
             .expect("failed to add 1 hour");
@@ -1196,16 +1196,13 @@ impl LocalClient {
         Ok(response)
     }
 
-    pub async fn local_logout(
-        &self,
-        jar: &CookieJar<'_>,
-    ) -> Result<(), OIDCError> {
+    pub async fn local_logout(&self, jar: &CookieJar<'_>) -> Result<(), OIDCError> {
         jar.remove_private(
             Cookie::build(("access_token", ""))
                 .http_only(true)
                 .same_site(SameSite::Lax),
         );
-        
+
         jar.remove_private(
             Cookie::build(("issuer_data", ""))
                 .secure(false)

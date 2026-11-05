@@ -1550,9 +1550,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.27"
+version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
+checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "loom"
@@ -2356,7 +2356,7 @@ dependencies = [
 
 [[package]]
 name = "rocket-oidc"
-version = "0.2.1"
+version = "0.2.3"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2365,6 +2365,7 @@ dependencies = [
  "futures",
  "hmac",
  "jsonwebtoken",
+ "log",
  "okapi",
  "openidconnect",
  "pkcs8",

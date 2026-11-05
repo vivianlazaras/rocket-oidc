@@ -3,6 +3,9 @@
 1. Reimplemented self signing local authentication through LocalClient.
 2. Added Validator method to OidcSigner.
 3. Cleaned up tests so critical ones pass.
+4. Fixed clippy warnings.
+5. Implemented client abstraction for local sign in.
+6. Created functionality for adding new clients dynamically.
 
 # 0.2.2
 1. Removed support for self signing

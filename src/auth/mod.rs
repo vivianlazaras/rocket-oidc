@@ -41,7 +41,6 @@ pub struct AuthGuard<T: Serialize + DeserializeOwned + Debug> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub(crate) struct IDClaims {
-
     pub iss: String,
     pub alg: String,
     pub exp: i64,
@@ -233,22 +232,19 @@ impl AuthState {
             // attempt to decode access token for invalid signature.
             let token = cookie.to_string();
             // this should catch invalid signature, and result in refresh.
-            if let Some(idclaims) = get_iss_alg(&token) {
-                if self
+            if let Some(idclaims) = get_iss_alg(&token)
+                && self
                     .validator(&issuer)
                     .await?
                     .decode_with_iss_alg::<BaseClaims>(iss, &idclaims.alg, &token)
                     .is_ok()
+            {
+                let (_, expired) = check_expiration(&cookie);
+                if let Ok(exp) = OffsetDateTime::from_unix_timestamp(idclaims.exp)
+                    && !expired
+                    && exp > OffsetDateTime::now_utc()
                 {
-                    let (_, expired) = check_expiration(&cookie);
-                    match OffsetDateTime::from_unix_timestamp(idclaims.exp) {
-                        Ok(exp) => {
-                            if !expired && exp > OffsetDateTime::now_utc() {
-                                return Ok(Redirect::to(default_post_login));
-                            }
-                        }
-                        Err(_) => {}
-                    }
+                    return Ok(Redirect::to(default_post_login));
                 }
             }
         }
@@ -426,10 +422,7 @@ impl AuthState {
 
     pub async fn local_logout(&self, jar: &CookieJar<'_>) -> Result<(), OIDCError> {
         let client_ref = self.client_for("http://localhost").await?;
-        client_ref
-            .try_local()?
-            .local_logout(jar)
-            .await?;
+        client_ref.try_local()?.local_logout(jar).await?;
         Ok(())
     }
 }

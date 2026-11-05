@@ -1,7 +1,7 @@
 //! This module is intended to provide utilities for parsing OIDC tokens from Authorization: Bearer headers
+use super::*;
 use serde::{Serialize, de::DeserializeOwned};
 use std::fmt::Debug;
-use super::*;
 
 async fn parse_authorization_header<
     T: Serialize + Debug + DeserializeOwned + std::marker::Send + CoreClaims,
