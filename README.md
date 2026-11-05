@@ -8,6 +8,7 @@ This is a simple utility crate that provides a FromRequest implementation, inclu
 2. Request User Info for User Info EndPoint
 3. Implement a FromRequest type to use in rocket routes.
 4. Handle JavaScript Web Token Validation
+5. Support for Locally Signed JWTs for Local Sign In.
 
 ### Supported OIDC Providers
 1. Keycloak.
@@ -37,6 +38,7 @@ impl CoreClaims for UserGuard {
     fn subject(&self) -> &str {
         self.sub.as_str()
     }
+    
 }
 
 pub type Guard = OIDCGuard<UserGuard>;
@@ -67,15 +69,6 @@ async fn rocket() -> _ {
         .await
         .unwrap()
 }
-```
-
-## Environment Setup
-
-```sh
-export ISSUER_URL="https://keycloak.com/realms/master" 
-export CLIENT_ID="my_app_client_id"
-export CLIENT_SECRET="/path/to/client/secret"
-export REDIRECT_URI="http://callback_url.com/"
 ```
 
 ## Contributing

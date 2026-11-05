@@ -6,7 +6,7 @@
 4. Fixed clippy warnings.
 5. Implemented client abstraction for local sign in.
 6. Created functionality for adding new clients dynamically.
-
+7. Implemented support for multiple clients.
 # 0.2.2
 1. Removed support for self signing
 2. Implemented proper state verification

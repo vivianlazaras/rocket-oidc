@@ -970,7 +970,7 @@ impl LocalClient {
     /// // this should be loaded from a file.
     /// let priv_key_str = "...";
     /// let config = WorkingConfig::new_local("localhost/accounts/dashboard").unwrap();
-    /// let signer = OidcSigner::from_x509_pem(priv_key_str, "0");
+    /// let signer = OidcSigner::from_x509_pem(priv_key_str, "0").unwrap();
     /// let client = LocalClient::new(config, signer).unwrap();
     /// ```
     pub fn new(config: WorkingConfig, signer: OidcSigner) -> Result<LocalClient, OIDCError> {
