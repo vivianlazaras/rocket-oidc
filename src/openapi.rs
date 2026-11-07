@@ -1,4 +1,4 @@
-use crate::auth::ApiKeyGuard;
+use crate::auth::api::ApiKeyGuard;
 use okapi::map;
 use okapi::openapi3::Responses;
 use okapi::openapi3::SecurityScheme;
