@@ -1071,7 +1071,7 @@ impl LocalClient {
             return Err(crate::errors::OIDCError::InvalidGrant);
         }
 
-        let subject = entry.subject;
+        let subject = entry.subject.clone();
 
         let claims = AccessTokenClaims::new(
             subject.clone(),
@@ -1164,7 +1164,7 @@ impl LocalClient {
     ) -> Result<CoreTokenResponse, OIDCError> {
         log::trace!("Starting local login for subject: {} with algorithm: {}", subject, algorithm);
         let code = self.issue_code(subject.to_string()).await;
-        log::trace!("Authorization code issued: {}", code);
+        log::trace!("Authorization code issued: {:?}", code);
         let response = self.exchange_code(code).await?;
         log::trace!("Token response received: {:?}", response);
         let access_token = response.access_token().secret().clone();
