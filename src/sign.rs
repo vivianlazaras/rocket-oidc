@@ -210,9 +210,17 @@ impl OidcSigner {
 
         // Build JWT header
         let header = jsonwebtoken::Header::new(Algorithm::from_str(&self.algorithm).unwrap());
-
+        log::trace!("JWT header: {:?}", header);
         // Encode the JWT
-        Ok(jsonwebtoken::encode(&header, &map, &self.key)?)
+        let token = match jsonwebtoken::encode(&header, &map, &self.key) {
+            Ok(t) => t,
+            Err(err) => {
+                log::error!("Failed to encode JWT: {:?}, header: {:?}, claims: {:?}", err, header, map);
+                return Err(err.into());
+            }
+        };
+        log::trace!("Generated JWT: {}", token);
+        Ok(token)
     }
 }
 
