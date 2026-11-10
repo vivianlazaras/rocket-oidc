@@ -1080,7 +1080,13 @@ impl LocalClient {
             3600,
         );
 
-        let access_token = self.signer.sign(&claims)?;
+        let access_token = match self.signer.sign(&claims) {
+            Ok(token) => token,
+            Err(err) => {
+                log::error!("Failed to sign access token: {:?}, claims: {:?}, code: {:?}", err, claims, entry);
+                return Err(crate::errors::OIDCError::InvalidGrant);
+            }
+        };
         let refresh_token = uuid::Uuid::new_v4().to_string();
 
         {
