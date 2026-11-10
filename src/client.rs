@@ -1156,12 +1156,13 @@ impl LocalClient {
         algorithm: &str,
         subject: &str,
     ) -> Result<CoreTokenResponse, OIDCError> {
-        log::info!("Starting local login for subject: {} with algorithm: {}", subject, algorithm);
+        log::trace!("Starting local login for subject: {} with algorithm: {}", subject, algorithm);
         let code = self.issue_code(subject.to_string()).await;
         let response = self.exchange_code(code).await?;
+        log::trace!("Token response received: {:?}", response);
         let access_token = response.access_token().secret().clone();
         let issuer = "http://localhost";
-        log::info!("Access token obtained: {}", access_token);
+        log::trace!("Access token obtained: {}", access_token);
         let issuer_exp = OffsetDateTime::now_utc()
             .checked_add(Duration::new(3600, 0))
             .expect("failed to add 1 hour");
