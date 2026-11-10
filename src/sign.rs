@@ -215,7 +215,7 @@ impl OidcSigner {
         let token = match jsonwebtoken::encode(&header, &map, &self.key) {
             Ok(t) => t,
             Err(err) => {
-                log::error!("Failed to encode JWT: {:?}, header: {:?}, claims: {:?}", err, header, map);
+                log::error!("Failed to encode JWT: {:?}, header: {:?}, claims: {:?}, key family: {:?}", err, header, map, self.key.family());
                 return Err(err.into());
             }
         };
