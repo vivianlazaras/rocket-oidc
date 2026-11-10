@@ -1156,13 +1156,12 @@ impl LocalClient {
         algorithm: &str,
         subject: &str,
     ) -> Result<CoreTokenResponse, OIDCError> {
+        log::info!("Starting local login for subject: {} with algorithm: {}", subject, algorithm);
         let code = self.issue_code(subject.to_string()).await;
         let response = self.exchange_code(code).await?;
         let access_token = response.access_token().secret().clone();
         let issuer = "http://localhost";
-        #[cfg(debug_assertions)]
-        println!("access token in local login fn: {}", access_token);
-
+        log::info!("Access token obtained: {}", access_token);
         let issuer_exp = OffsetDateTime::now_utc()
             .checked_add(Duration::new(3600, 0))
             .expect("failed to add 1 hour");
@@ -1173,7 +1172,7 @@ impl LocalClient {
                 // this should be when the token expires but meh
                 .expires(issuer_exp)
                 .http_only(true)
-                .same_site(SameSite::Lax),
+                .same_site(SameSite::Strict),
         );
 
         // Build issuer_data JSON
@@ -1190,7 +1189,7 @@ impl LocalClient {
                 .secure(false)
                 .http_only(false) // if you don't want JS access, set to true
                 .expires(issuer_exp)
-                .same_site(SameSite::Lax),
+                .same_site(SameSite::Strict),
         );
 
         Ok(response)
@@ -1200,14 +1199,14 @@ impl LocalClient {
         jar.remove_private(
             Cookie::build(("access_token", ""))
                 .http_only(true)
-                .same_site(SameSite::Lax),
+                .same_site(SameSite::Strict),
         );
 
         jar.remove_private(
             Cookie::build(("issuer_data", ""))
                 .secure(false)
                 .http_only(false) // if you don't want JS access, set to true
-                .same_site(SameSite::Lax),
+                .same_site(SameSite::Strict),
         );
 
         Ok(())

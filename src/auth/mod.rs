@@ -407,6 +407,7 @@ impl AuthState {
         alg: &str,
         subject: &str,
     ) -> Result<String, OIDCError> {
+        log::info!("Attempting local login for http://localhost with provided algorithm: {}", alg);
         let client_ref = self.client_for("http://localhost").await?;
         let response = client_ref
             .try_local()?
