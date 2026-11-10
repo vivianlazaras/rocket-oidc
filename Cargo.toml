@@ -12,7 +12,7 @@ cookie = "0.18.1"
 err-derive = "0.3.1"
 futures = "0.3.31"
 hmac = "0.12.1"
-jsonwebtoken = { version = "10.0.0", features = ["rust_crypto"]}
+jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"]}
 openidconnect = "4.0.0"
 pkcs8 = "0.10.2"
 rand = "0.8"
